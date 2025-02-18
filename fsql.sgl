@@ -270,6 +270,56 @@ END;
 $$;
 
 ---------------------------------------------------------
+-- Функция расчета температуры
+---------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.fnHeaderGetTemperature(t0 NUMERIC)
+    RETURNS TEXT AS $$
+DECLARE
+    deltaT_V NUMERIC;
+    T0 NUMERIC;
+    deltaT NUMERIC;
+    result TEXT;
+BEGIN
+    -- Определяем виртуальную поправку по измеренной температуре t0
+    IF t0 < 0 THEN
+        deltaT_V := 0;
+    ELSIF t0 <= 5 THEN
+        deltaT_V := 0.5;
+    ELSIF t0 <= 10 THEN
+        -- Линейная интерполяция между 5 и 10: от 0.5 до 1.0
+        deltaT_V := 0.5 + ((t0 - 5) * (1.0 - 0.5) / (10 - 5));
+    ELSIF t0 <= 15 THEN
+        deltaT_V := 1.0;
+    ELSIF t0 <= 20 THEN
+        -- Интерполируем между 15 и 20: от 1.0 до 1.5
+        deltaT_V := 1.0 + ((t0 - 15) * (1.5 - 1.0) / (20 - 15));
+    ELSIF t0 <= 25 THEN
+        deltaT_V := 1.5 + ((t0 - 20) * (2.0 - 1.5) / (25 - 20));
+    ELSIF t0 <= 30 THEN
+        deltaT_V := 2.0 + ((t0 - 25) * (3.5 - 2.0) / (30 - 25));
+    ELSIF t0 <= 40 THEN
+        deltaT_V := 3.5 + ((t0 - 30) * (4.5 - 3.5) / (40 - 30));
+    ELSE
+        deltaT_V := 4.5;
+    END IF;
+
+    -- Вычисляем виртуальную температуру T0 и отклонение от табличного (+15,9°C)
+    T0 := t0 + deltaT_V;
+    deltaT := round(T0 - 15.9);
+
+    -- Форматируем результат: если положительный — две цифры, если отрицательный — с ведущей 5
+    IF deltaT >= 0 THEN
+        result := LPAD(deltaT::TEXT, 2, '0');
+    ELSE
+        result := '5' || LPAD(ABS(deltaT)::TEXT, 2, '0');
+    END IF;
+
+    RETURN result;
+END;
+$$ LANGUAGE plpgsql;
+
+---------------------------------------------------------
 -- Функция интерполяции коррекции температуры
 ---------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.interpolate_correction(temp_input NUMERIC)
@@ -324,6 +374,7 @@ SELECT public.fnHeaderGetData();
 SELECT public.fnHeaderGetHeight(10);
 SELECT * FROM public.calc_temperatures_correction;
 SELECT public.interpolate_correction(23);
+SELECT public.fnHeaderGetTemperature(50);
 
 ---------------------------------------------------------
 -- Добавление дополнительных пользователей
