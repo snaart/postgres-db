@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>METEO - Прототип интерфейса</title>
+  <style>
+    /* ------------------- СТИЛИ ------------------- */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #202020; /* Тёмно-серый фон */
+      color: #fff;              /* Белый текст */
+    }
+    /* Верхняя панель */
+    header {
+      background-color: #2a2a2a;
+      padding: 10px;
+      display: flex;
+      align-items: center;
+    }
+    .left-section h1 {
+      margin: 0;
+      font-size: 1.2rem;
+    }
+    .center-section {
+      flex: 1;
+      text-align: center;
+    }
+    .right-section {
+      margin-left: auto;
+      position: relative; /* Для выпадающего меню */
+    }
+    /* Кнопки вкладок */
+    .menu-btn {
+      background: none;
+      border: none;
+      color: #ccc;
+      padding: 10px 20px;
+      margin: 0 10px;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    .menu-btn.active,
+    .menu-btn:hover {
+      color: #fff;
+      border-bottom: 2px solid #fff;
+    }
+    /* Кнопка "⋮" */
+    .icon-btn {
+      background: none;
+      border: none;
+      color: #ccc;
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+    .icon-btn:hover {
+      color: #fff;
+    }
+
+    /* Выпадающее меню (спрятано по умолчанию) */
+    .dropdown-menu {
+      position: absolute;
+      top: 50px;
+      right: 0;
+      background-color: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 4px;
+      overflow: hidden;
+      display: none; /* будет отображаться при открытии */
+      min-width: 150px;
+      z-index: 10;
+    }
+    .dropdown-menu a {
+      display: block;
+      padding: 10px;
+      color: #ccc;
+      text-decoration: none;
+      border-bottom: 1px solid #444;
+    }
+    .dropdown-menu a:hover {
+      background-color: #444;
+      color: #fff;
+    }
+    .dropdown-menu a:last-child {
+      border-bottom: none;
+    }
+
+    /* Основной контейнер с вкладками */
+    .tabs-container {
+      padding: 20px;
+    }
+    /* Скрываем контент неактивных вкладок */
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+
+    /* ---------- Вкладка "МЕТЕОБЮЛЛЕТЕНЬ" ---------- */
+    .meteo-bulletin {
+      display: flex;
+      gap: 20px;
+    }
+    /* Левый блок */
+    .left-panel {
+      width: 250px;
+      background-color: #2a2a2a;
+      padding: 20px;
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .device-switch {
+      display: flex;
+      gap: 15px;
+      justify-content: center;
+    }
+    .device-switch label {
+      cursor: pointer;
+      font-weight: bold;
+      color: #ccc;
+    }
+    .device-switch input[type="radio"] {
+      margin-right: 5px;
+    }
+    .device-switch input[type="radio"]:checked + span {
+      color: #fff;
+    }
+    .info-block .info-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .info-block .info-item span {
+      width: 60%;
+    }
+    .info-block .info-item input {
+      width: 40%;
+      background-color: #333;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 5px;
+      border-radius: 3px;
+    }
+    .buttons-block {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .action-btn {
+      background-color: #333;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 10px;
+      cursor: pointer;
+      text-align: center;
+      border-radius: 5px;
+      font-weight: bold;
+    }
+    .action-btn:hover {
+      background-color: #444;
+    }
+    .action-btn.red {
+      background-color: #a33;
+      border-color: #c44;
+    }
+    .action-btn.red:hover {
+      background-color: #c44;
+    }
+
+    /* Центральный и правый блок */
+    .center-panel,
+    .right-panel {
+      flex: 1;
+      background-color: #2a2a2a;
+      padding: 20px;
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      margin: 0;
+    }
+    .panel-header {
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    .meteo-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .meteo-table th,
+    .meteo-table td {
+      border: 1px solid #444;
+      padding: 8px;
+      text-align: center;
+    }
+    .meteo-table thead {
+      background-color: #333;
+    }
+    .meteo-table tbody tr:nth-child(even) {
+      background-color: #252525;
+    }
+
+    /* ---------- Вкладка "ЖУРНАЛ ИЗМЕРЕНИЙ" ---------- */
+    .journal {
+      background-color: #2a2a2a;
+      padding: 20px;
+      border-radius: 5px;
+    }
+    .journal-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    .journal-table th,
+    .journal-table td {
+      border: 1px solid #444;
+      padding: 8px;
+      text-align: left;
+    }
+    .journal-table thead {
+      background-color: #333;
+    }
+    .journal-table tbody tr:nth-child(even) {
+      background-color: #252525;
+    }
+
+    /* Модальное окно (пример, чтобы показать реакцию на кнопку) */
+    .modal-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.6);
+      display: none; /* По умолчанию скрыто */
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+    .modal {
+      background-color: #2a2a2a;
+      padding: 20px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      min-width: 300px;
+      max-width: 80%;
+      text-align: center;
+    }
+    .modal p {
+      margin-bottom: 20px;
+    }
+    .close-modal {
+      background-color: #333;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 10px;
+      cursor: pointer;
+      border-radius: 5px;
+    }
+    .close-modal:hover {
+      background-color: #444;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ------------------- ШАПКА (HEADER) ------------------- -->
+  <header>
+    <div class="left-section">
+      <h1>METEO</h1>
+    </div>
+    <div class="center-section">
+      <button class="menu-btn active" data-tab="bulletin">МЕТЕОБЮЛЛЕТЕНЬ</button>
+      <button class="menu-btn" data-tab="journal">ЖУРНАЛ ИЗМЕРЕНИЙ</button>
+    </div>
+    <div class="right-section">
+      <button class="icon-btn" id="settings-btn">⋮</button>
+      <!-- Выпадающее меню -->
+      <div class="dropdown-menu" id="dropdown">
+        <a href="#">Настройки</a>
+        <a href="#">Выход</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ------------------- ОСНОВНОЙ КОНТЕЙНЕР ------------------- -->
+  <div class="tabs-container">
+    <!-- ---------- Вкладка "МЕТЕОБЮЛЛЕТЕНЬ" ---------- -->
+    <section id="bulletin" class="tab-content active">
+      <div class="meteo-bulletin">
+        <!-- Левый блок -->
+        <div class="left-panel">
+          <div class="device-switch">
+            <label>
+              <input type="radio" name="device" checked>
+              <span>ДМК</span>
+            </label>
+            <label>
+              <input type="radio" name="device">
+              <span>ВР</span>
+            </label>
+          </div>
+
+          <div class="info-block">
+            <div class="info-item">
+              <span>Высота метеопоста</span>
+              <input type="text" placeholder="100">
+            </div>
+            <div class="info-item">
+              <span>Температура</span>
+              <input type="text" placeholder="15">
+            </div>
+            <div class="info-item">
+              <span>Давление</span>
+              <input type="text" placeholder="750">
+            </div>
+            <div class="info-item">
+              <span>Направление ветра</span>
+              <input type="text" placeholder="СС">
+            </div>
+            <div class="info-item">
+              <span>Скорость ветра</span>
+              <input type="text" placeholder="0">
+            </div>
+          </div>
+
+          <div class="buttons-block">
+            <button class="action-btn" id="compose-btn">СОСТАВИТЬ МЕТЕО-11</button>
+            <button class="action-btn red" id="accept-btn">ПРИНЯТЬ КАК ДЕЙСТВИЕ</button>
+          </div>
+        </div>
+
+        <!-- Центральный блок -->
+        <div class="center-panel">
+          <div class="panel-header">
+            МЕТЕО-11 приближенный
+          </div>
+          <table class="meteo-table">
+            <thead>
+              <tr>
+                <th>ДТ</th>
+                <th>aW</th>
+                <th>W</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>TT</td>
+                <td>NN</td>
+                <td>CC</td>
+              </tr>
+              <tr>
+                <td>TT</td>
+                <td>NN</td>
+                <td>CC</td>
+              </tr>
+              <tr>
+                <td>TT</td>
+                <td>NN</td>
+                <td>CC</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Правый блок -->
+        <div class="right-panel">
+          <div class="panel-header">
+            МЕТЕО-11
+          </div>
+          <table class="meteo-table">
+            <thead>
+              <tr>
+                <th>ДТ</th>
+                <th>aW</th>
+                <th>W</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>TT</td>
+                <td>NN</td>
+                <td>CC</td>
+              </tr>
+              <tr>
+                <td>TT</td>
+                <td>NN</td>
+                <td>CC</td>
+              </tr>
+              <tr>
+                <td>TT</td>
+                <td>NN</td>
+                <td>CC</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- Вкладка "ЖУРНАЛ ИЗМЕРЕНИЙ" ---------- -->
+    <section id="journal" class="tab-content">
+      <div class="journal">
+        <h2>Журнал измерений</h2>
+        <table class="journal-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>Тип устройства</th>
+              <th>Давление</th>
+              <th>Температура</th>
+              <th>Высота</th>
+              <th>Направление ветра</th>
+              <th>Скорость ветра</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>2025-02-18</td>
+              <td>Датчик ДМК</td>
+              <td>750</td>
+              <td>15</td>
+              <td>100</td>
+              <td>Север</td>
+              <td>5</td>
+            </tr>
+            <tr>
+              <td>2025-02-19</td>
+              <td>Датчик ВР</td>
+              <td>760</td>
+              <td>14</td>
+              <td>100</td>
+              <td>Юг</td>
+              <td>3</td>
+            </tr>
+            <tr>
+              <td>2025-02-20</td>
+              <td>Датчик ДМК</td>
+              <td>755</td>
+              <td>16</td>
+              <td>100</td>
+              <td>Запад</td>
+              <td>4</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ------------------- МОДАЛЬНОЕ ОКНО (пример) ------------------- -->
+  <div class="modal-bg" id="modal-bg">
+    <div class="modal" id="modal">
+      <p>Действие выполнено (прототип)!</p>
+      <button class="close-modal" id="close-modal">Закрыть</button>
+    </div>
+  </div>
+
+  <!-- ------------------- СКРИПТЫ ------------------- -->
+  <script>
+    // Переключение вкладок
+    const menuButtons = document.querySelectorAll('.menu-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    menuButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Удаляем active у всех кнопок
+        menuButtons.forEach(b => b.classList.remove('active'));
+        // Добавляем active к нажатой кнопке
+        btn.classList.add('active');
+
+        // Показываем нужную вкладку
+        const tabId = btn.getAttribute('data-tab');
+        tabContents.forEach(tab => {
+          tab.classList.remove('active');
+          if (tab.id === tabId) {
+            tab.classList.add('active');
+          }
+        });
+      });
+    });
+
+    // Выпадающее меню "⋮"
+    const settingsBtn = document.getElementById('settings-btn');
+    const dropdown = document.getElementById('dropdown');
+
+    settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // чтобы клик на кнопку не скрывал меню
+      dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    });
+
+    // Скрывать меню при клике вне его области
+    document.addEventListener('click', (e) => {
+      if (!dropdown.contains(e.target) && e.target !== settingsBtn) {
+        dropdown.style.display = 'none';
+      }
+    });
+
+    // Модальное окно при клике на кнопки "СОСТАВИТЬ МЕТЕО-11" и "ПРИНЯТЬ КАК ДЕЙСТВИЕ"
+    const composeBtn = document.getElementById('compose-btn');
+    const acceptBtn = document.getElementById('accept-btn');
+    const modalBg = document.getElementById('modal-bg');
+    const closeModalBtn = document.getElementById('close-modal');
+
+    function openModal() {
+      modalBg.style.display = 'flex';
+    }
+    function closeModal() {
+      modalBg.style.display = 'none';
+    }
+
+    composeBtn.addEventListener('click', openModal);
+    acceptBtn.addEventListener('click', openModal);
+    closeModalBtn.addEventListener('click', closeModal);
+
+    // Чтобы клик за пределами модального окна тоже закрывал его
+    modalBg.addEventListener('click', (e) => {
+      if (e.target === modalBg) {
+        closeModal();
+      }
+    });
+  </script>
+</body>
+</html>
