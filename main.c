@@ -1,117 +1,91 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <libpq-fe.h>
-#include <time.h>
-#include <math.h>
 
-/* Структура для хранения одной точки интерполяции */
-typedef struct {
-    double temperature;
-    double correction;
-} CorrectionPoint;
-
-/* Функция сравнения для сортировки массива точек по температуре */
-int compare_points(const void *a, const void *b) {
-    CorrectionPoint *pa = (CorrectionPoint*) a;
-    CorrectionPoint *pb = (CorrectionPoint*) b;
-    if (pa->temperature < pb->temperature)
-        return -1;
-    else if (pa->temperature > pb->temperature)
-        return 1;
-    else
-        return 0;
-}
-
-/* Функция линейной интерполяции:
-   Если t точно совпадает с одной из точек – возвращает её correction,
-   иначе находит две ближайшие точки и вычисляет значение по формуле */
-double interpolate(double t, CorrectionPoint *points, int n) {
-    if(t <= points[0].temperature)
-        return points[0].correction;
-    if(t >= points[n-1].temperature)
-        return points[n-1].correction;
-
-    for(int i = 0; i < n - 1; i++) {
-        if(t >= points[i].temperature && t <= points[i+1].temperature) {
-            double x0 = points[i].temperature;
-            double x1 = points[i+1].temperature;
-            double y0 = points[i].correction;
-            double y1 = points[i+1].correction;
-            /* Защита от деления на 0 */
-            if(fabs(x1 - x0) < 1e-9)
-                return y0;
-            return y0 + (y1 - y0) * (t - x0) / (x1 - x0);
-        }
-    }
-    return 0.0; // В теории сюда не дойдём
-}
-
-int main() {
-    /* Параметры подключения к БД.
-       Отредактируйте строку подключения в соответствии с вашими настройками. */
+int main(void) {
+    /* Параметры подключения – отредактируйте по необходимости */
     const char *conninfo = "dbname=mydb user=myuser password=12345 host=localhost port=5432";
     PGconn *conn = PQconnectdb(conninfo);
-    if(PQstatus(conn) != CONNECTION_OK) {
+    if (PQstatus(conn) != CONNECTION_OK) {
         fprintf(stderr, "Ошибка подключения: %s\n", PQerrorMessage(conn));
         PQfinish(conn);
         return EXIT_FAILURE;
     }
 
-    /* Запрос данных из таблицы calc_temperatures_correction */
-    PGresult *res = PQexec(conn, "SELECT temperature, correction FROM public.calc_temperatures_correction ORDER BY temperature ASC");
-    if(PQresultStatus(res) != PGRES_TUPLES_OK) {
-        fprintf(stderr, "Ошибка запроса: %s\n", PQerrorMessage(conn));
+    /* Готовим запрос с параметром (t – текущая температура)
+       Он возвращает:
+         lower_temp – максимальная температура, не превышающая t
+         lower_corr – соответствующая корректировка,
+         upper_temp – минимальная температура, не меньшая t
+         upper_corr – соответствующая корректировка */
+    const char *stmtName = "interp";
+    const char *stmt =
+      "SELECT "
+      "  (SELECT temperature FROM calc_temperatures_correction WHERE temperature <= $1 ORDER BY temperature DESC LIMIT 1) AS lower_temp, "
+      "  (SELECT correction  FROM calc_temperatures_correction WHERE temperature <= $1 ORDER BY temperature DESC LIMIT 1) AS lower_corr, "
+      "  (SELECT temperature FROM calc_temperatures_correction WHERE temperature >= $1 ORDER BY temperature ASC LIMIT 1) AS upper_temp, "
+      "  (SELECT correction  FROM calc_temperatures_correction WHERE temperature >= $1 ORDER BY temperature ASC LIMIT 1) AS upper_corr";
+
+    PGresult *res = PQprepare(conn, stmtName, stmt, 1, NULL);
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        fprintf(stderr, "Ошибка подготовки запроса: %s\n", PQerrorMessage(conn));
         PQclear(res);
         PQfinish(conn);
         return EXIT_FAILURE;
     }
-
-    int n_points = PQntuples(res);
-    CorrectionPoint *points = malloc(n_points * sizeof(CorrectionPoint));
-    if(points == NULL) {
-        fprintf(stderr, "Ошибка выделения памяти\n");
-        PQclear(res);
-        PQfinish(conn);
-        return EXIT_FAILURE;
-    }
-
-    /* Чтение данных из результата запроса */
-    for(int i = 0; i < n_points; i++) {
-        points[i].temperature = atof(PQgetvalue(res, i, 0));
-        points[i].correction = atof(PQgetvalue(res, i, 1));
-    }
-    /* Если данные не гарантированно отсортированы, можно отсортировать массив */
-    qsort(points, n_points, sizeof(CorrectionPoint), compare_points);
-
     PQclear(res);
 
-    /* Начало замера времени расчета */
-    clock_t start = clock();
+    /* Цикл по температуре от 0 до 40 с шагом 0.01.
+       Для каждого значения мы выполняем запрос, получаем границы и вычисляем интерполяцию. */
+    double t, lower_temp, lower_corr, upper_temp, upper_corr, interp;
+    char param[64];
 
-    /* Переменные для проверки (например, суммирование результатов) */
-    double sum = 0.0;
-    int count = 0;
+    /* Всего шагов: 4000 шагов + начальное значение (0.00) */
+    for (int i = 0; i <= 4000; i++) {
+        t = i * 0.01;
+        snprintf(param, sizeof(param), "%lf", t);
+        const char *params[1] = { param };
 
-    /* Расчет интерполяции от 0 до 40 градусов с шагом 0.01.
-       Для каждого значения температура вычисляется "на лету" без кеширования. */
-    for(double t = 0.0; t <= 40.0; t += 0.01) {
-        double corr = interpolate(t, points, n_points);
-        sum += corr;  // суммирование для проверки корректности работы алгоритма
-        count++;
-        /* Раскомментируйте следующую строку для вывода каждого результата (замедлит расчет) */
-        // printf("t = %.2f, correction = %.4f\n", t, corr);
+        res = PQexecPrepared(conn, stmtName, 1, params, NULL, NULL, 0);
+        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+            fprintf(stderr, "Ошибка выполнения запроса для t = %.2lf: %s\n", t, PQerrorMessage(conn));
+            PQclear(res);
+            continue;
+        }
+
+        /* Ожидается ровно одна строка */
+        if (PQntuples(res) != 1) {
+            fprintf(stderr, "Неверное число строк для t = %.2lf\n", t);
+            PQclear(res);
+            continue;
+        }
+
+        /* Если значение ниже минимального в таблице – используем корректировку верхней точки,
+           если выше максимального – используем корректировку нижней точки.
+           Функция PQgetisnull() проверяет, возвращено ли значение. */
+        int lower_isnull = PQgetisnull(res, 0, 0);
+        int upper_isnull = PQgetisnull(res, 0, 2);
+
+        if (lower_isnull) {
+            interp = atof(PQgetvalue(res, 0, 3));  // t ниже минимума
+        } else if (upper_isnull) {
+            interp = atof(PQgetvalue(res, 0, 1));  // t выше максимума
+        } else {
+            lower_temp = atof(PQgetvalue(res, 0, 0));
+            lower_corr = atof(PQgetvalue(res, 0, 1));
+            upper_temp = atof(PQgetvalue(res, 0, 2));
+            upper_corr = atof(PQgetvalue(res, 0, 3));
+
+            if (upper_temp - lower_temp == 0)
+                interp = lower_corr;  // Предотвращаем деление на ноль
+            else
+                interp = lower_corr + (upper_corr - lower_corr) * (t - lower_temp) / (upper_temp - lower_temp);
+        }
+
+        printf("t = %.2lf, interpolated correction = %.4lf\n", t, interp);
+        PQclear(res);
     }
 
-    clock_t end = clock();
-    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
-
-    /* Вывод результатов */
-    printf("Выполнено %d интерполяционных вычислений.\n", count);
-    printf("Общая сумма коррекций (для проверки): %.4f\n", sum);
-    printf("Время расчета: %.6f секунд.\n", elapsed);
-
-    free(points);
     PQfinish(conn);
-
     return EXIT_SUCCESS;
 }
