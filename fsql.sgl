@@ -1,0 +1,384 @@
+-- Создание схемы, если её ещё нет
+CREATE SCHEMA IF NOT EXISTS public;
+
+DO $$
+    BEGIN
+        RAISE NOTICE 'Запускаем создание новой структуры базы данных meteo';
+
+        ---------------------------
+        -- Удаление старых объектов
+        ---------------------------
+        -- Удаляем внешние ключи
+        ALTER TABLE IF EXISTS public.measurment_input_params DROP CONSTRAINT IF EXISTS measurment_type_id_fk;
+        ALTER TABLE IF EXISTS public.employees DROP CONSTRAINT IF EXISTS military_rank_id_fk;
+        ALTER TABLE IF EXISTS public.measurment_baths DROP CONSTRAINT IF EXISTS measurment_input_param_id_fk;
+        ALTER TABLE IF EXISTS public.measurment_baths DROP CONSTRAINT IF EXISTS emploee_id_fk;
+
+        -- Удаляем таблицы
+        DROP TABLE IF EXISTS public.measurment_input_params;
+        DROP TABLE IF EXISTS public.measurment_baths;
+        DROP TABLE IF EXISTS public.employees;
+        DROP TABLE IF EXISTS public.measurment_types;
+        DROP TABLE IF EXISTS public.military_ranks;
+        DROP TABLE IF EXISTS public.temperature;
+        DROP TABLE IF EXISTS public.calc_temperatures_correction;
+
+        -- Удаляем последовательности
+        DROP SEQUENCE IF EXISTS public.measurment_input_params_seq;
+        DROP SEQUENCE IF EXISTS public.measurment_baths_seq;
+        DROP SEQUENCE IF EXISTS public.employees_seq;
+        DROP SEQUENCE IF EXISTS public.military_ranks_seq;
+        DROP SEQUENCE IF EXISTS public.measurment_types_seq;
+
+        RAISE NOTICE 'Удаление старых данных выполнено успешно';
+
+        ---------------------------
+        -- Создание справочников
+        ---------------------------
+        -- Таблица воинских званий
+        CREATE TABLE public.military_ranks (
+                                               id integer PRIMARY KEY NOT NULL,
+                                               description character varying(255)
+        );
+        INSERT INTO public.military_ranks(id, description)
+        VALUES (1, 'Рядовой'), (2, 'Лейтенант');
+        CREATE SEQUENCE public.military_ranks_seq START 3;
+        ALTER TABLE public.military_ranks ALTER COLUMN id SET DEFAULT nextval('public.military_ranks_seq');
+
+        -- Таблица сотрудников
+        CREATE TABLE public.employees (
+                                          id integer PRIMARY KEY NOT NULL,
+                                          name text,
+                                          birthday timestamp,
+                                          military_rank_id integer
+        );
+        INSERT INTO public.employees(id, name, birthday, military_rank_id)
+        VALUES (1, 'Воловиков Александр Сергеевич','1978-06-24', 2);
+        CREATE SEQUENCE public.employees_seq START 2;
+        ALTER TABLE public.employees ALTER COLUMN id SET DEFAULT nextval('public.employees_seq');
+
+        -- Таблица типов измерительных устройств
+        CREATE TABLE public.measurment_types (
+                                                 id integer PRIMARY KEY NOT NULL,
+                                                 short_name character varying(50),
+                                                 description text
+        );
+        INSERT INTO public.measurment_types(id, short_name, description)
+        VALUES (1, 'ДМК', 'Десантный метео комплекс'),
+               (2, 'ВР', 'Ветровое ружье');
+        CREATE SEQUENCE public.measurment_types_seq START 3;
+        ALTER TABLE public.measurment_types ALTER COLUMN id SET DEFAULT nextval('public.measurment_types_seq');
+
+        ---------------------------
+        -- Создание таблиц измерений
+        ---------------------------
+        -- Параметры измерений
+        CREATE TABLE public.measurment_input_params (
+                                                        id integer PRIMARY KEY NOT NULL,
+                                                        measurment_type_id integer NOT NULL,
+                                                        height numeric(8,2) DEFAULT 0,
+                                                        temperature numeric(8,2) DEFAULT 0,
+                                                        pressure numeric(8,2) DEFAULT 0,
+                                                        wind_direction numeric(8,2) DEFAULT 0,
+                                                        wind_speed numeric(8,2) DEFAULT 0
+        );
+        INSERT INTO public.measurment_input_params(id, measurment_type_id, height, temperature, pressure, wind_direction, wind_speed)
+        VALUES (1, 1, 100, 12, 34, 0.2, 45);
+        CREATE SEQUENCE public.measurment_input_params_seq START 2;
+        ALTER TABLE public.measurment_input_params ALTER COLUMN id SET DEFAULT nextval('public.measurment_input_params_seq');
+
+        -- История измерений
+        CREATE TABLE public.measurment_baths (
+                                                 id integer PRIMARY KEY NOT NULL,
+                                                 emploee_id integer NOT NULL,
+                                                 measurment_input_param_id integer NOT NULL,
+                                                 started timestamp DEFAULT now()
+        );
+        INSERT INTO public.measurment_baths(id, emploee_id, measurment_input_param_id)
+        VALUES (1, 1, 1);
+        CREATE SEQUENCE public.measurment_baths_seq START 2;
+        ALTER TABLE public.measurment_baths ALTER COLUMN id SET DEFAULT nextval('public.measurment_baths_seq');
+
+        RAISE NOTICE 'Создание общих справочников и наполнение выполнено успешно';
+
+        ---------------------------
+        -- Создание таблицы коррекции температур
+        ---------------------------
+        CREATE TABLE IF NOT EXISTS public.calc_temperatures_correction (
+                                                                           temperature numeric(8,2) PRIMARY KEY,
+                                                                           correction numeric(8,2)
+        );
+        INSERT INTO public.calc_temperatures_correction(temperature, correction)
+        VALUES (0, 0.5), (5, 0.5), (10, 1), (20, 1), (25, 2), (30, 3.5), (40, 4.5);
+
+        ---------------------------
+        -- Создание типа для интерполяции
+        ---------------------------
+        DROP TYPE IF EXISTS public.interpolation_type;
+        CREATE TYPE public.interpolation_type AS (
+                                                     x0 numeric(8,2),
+                                                     x1 numeric(8,2),
+                                                     y0 numeric(8,2),
+                                                     y1 numeric(8,2)
+                                                 );
+
+        RAISE NOTICE 'Расчетные структуры сформированы';
+
+        ---------------------------
+        -- Восстановление внешних ключей
+        ---------------------------
+        ALTER TABLE public.measurment_baths
+            ADD CONSTRAINT emploee_id_fk FOREIGN KEY (emploee_id) REFERENCES public.employees (id);
+        ALTER TABLE public.measurment_baths
+            ADD CONSTRAINT measurment_input_param_id_fk FOREIGN KEY (measurment_input_param_id) REFERENCES public.measurment_input_params (id);
+        ALTER TABLE public.measurment_input_params
+            ADD CONSTRAINT measurment_type_id_fk FOREIGN KEY (measurment_type_id) REFERENCES public.measurment_types (id);
+        ALTER TABLE public.employees
+            ADD CONSTRAINT military_rank_id_fk FOREIGN KEY (military_rank_id) REFERENCES public.military_ranks (id);
+
+        RAISE NOTICE 'Связи сформированы';
+        RAISE NOTICE 'Структура сформирована успешно';
+    END $$;
+
+---------------------------------------------------------
+-- Дополнительные объекты: настройки и константы
+---------------------------------------------------------
+DROP TABLE IF EXISTS public.measure_settings;
+DROP TABLE IF EXISTS public.constants;
+
+CREATE TABLE IF NOT EXISTS public.constants (
+                                                key character varying(30) NOT NULL,
+                                                value text NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_key ON public.constants (key);
+
+CREATE TABLE IF NOT EXISTS public.measure_settings (
+                                                       param VARCHAR(50) NOT NULL,
+                                                       min_value NUMERIC NOT NULL,
+                                                       max_value NUMERIC NOT NULL,
+                                                       unit VARCHAR(20) NOT NULL
+);
+
+DO $$
+    BEGIN
+        IF (SELECT COUNT(*) FROM public.measure_settings) >= 3 THEN
+            RAISE NOTICE 'Данные уже добавлены';
+        ELSE
+            INSERT INTO public.measure_settings (param, min_value, max_value, unit)
+            VALUES
+                ('Высота метеопоста', -10000, 10000, 'м'),
+                ('Температура', -58, 58, '°C'),
+                ('Давление', 500, 900, 'мм рт. ст.'),
+                ('Направление ветра', 0, 59, '°'),
+                ('Скорость ветра', 0, 15, 'м/c'),
+                ('Дальность сноса пуль', 0, 150, 'м');
+            RAISE NOTICE 'Данные добавлены успешно';
+        END IF;
+    END $$;
+
+---------------------------------------------------------
+-- Создание типа и функции для проверки параметров
+---------------------------------------------------------
+DROP TYPE IF EXISTS public.measure_type CASCADE;
+CREATE TYPE public.measure_type AS (
+                                       param NUMERIC
+                                   );
+
+CREATE OR REPLACE FUNCTION public.get_measure_setting(type_param VARCHAR, value_param NUMERIC)
+    RETURNS public.measure_type AS $$
+DECLARE
+    mn_value NUMERIC;
+    mx_value NUMERIC;
+    result public.measure_type;
+BEGIN
+    SELECT min_value, max_value
+    INTO mn_value, mx_value
+    FROM public.measure_settings
+    WHERE param = type_param;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Параметр % не найден', type_param;
+    END IF;
+
+    IF value_param < mn_value OR value_param > mx_value THEN
+        RAISE EXCEPTION 'Входные данные % не входят в диапазон [% - %]', value_param, mn_value, mx_value;
+    END IF;
+
+    result.param := value_param;
+    RETURN result;
+END;
+$$ LANGUAGE plpgsql;
+
+---------------------------------------------------------
+-- Функции формирования заголовков
+---------------------------------------------------------
+DROP FUNCTION IF EXISTS public.fnHeaderGetPresure(numeric, numeric);
+DROP FUNCTION IF EXISTS public.fnHeaderGetData();
+DROP FUNCTION IF EXISTS public.fnHeaderGetHeight(integer);
+
+CREATE OR REPLACE FUNCTION public.fnHeaderGetPresure(pressure NUMERIC, temperature NUMERIC)
+    RETURNS TEXT
+    LANGUAGE plpgsql
+AS $$
+DECLARE
+    var_result NUMERIC;
+    txt TEXT;
+    results NUMERIC;
+    int_res INTEGER;
+BEGIN
+    SELECT value::numeric
+    INTO var_result
+    FROM public.constants
+    WHERE key = 'const_pressure';
+
+    results := pressure - var_result;
+    int_res := results::integer;
+
+    IF int_res > 0 THEN
+        txt := LPAD(int_res::text, 3, '0');
+    ELSE
+        txt := '5' || LPAD(ABS(int_res)::text, 2, '0');
+    END IF;
+
+    RETURN txt;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fnHeaderGetData()
+    RETURNS TEXT
+    LANGUAGE plpgsql
+AS $$
+DECLARE
+    var_result TEXT;
+BEGIN
+    var_result := TO_CHAR(NOW(), 'DDHH') || LEFT(TO_CHAR(NOW(), 'MI'), 1);
+    RETURN var_result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.fnHeaderGetHeight(height INTEGER)
+    RETURNS TEXT
+    LANGUAGE plpgsql
+AS $$
+DECLARE
+    var_result TEXT;
+BEGIN
+    var_result := LPAD(height::text, 4, '0');
+    RAISE NOTICE 'Результат: %', var_result;
+    RETURN var_result;
+END;
+$$;
+
+---------------------------------------------------------
+-- Функция интерполяции коррекции температуры
+---------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.interpolate_correction(temp_input NUMERIC)
+    RETURNS NUMERIC AS $$
+DECLARE
+    interp_data public.interpolation_type;
+    correction_result NUMERIC;
+BEGIN
+    -- Если найдена точная коррекция
+    SELECT correction
+    INTO correction_result
+    FROM public.calc_temperatures_correction
+    WHERE temperature = temp_input;
+
+    IF FOUND THEN
+        RETURN correction_result;
+    END IF;
+
+    -- Интерполяция между ближайшими значениями
+    SELECT t1.temperature, t2.temperature, t1.correction, t2.correction
+    INTO interp_data
+    FROM (
+             SELECT temperature, correction
+             FROM public.calc_temperatures_correction
+             WHERE temperature <= temp_input
+             ORDER BY temperature DESC
+             LIMIT 1
+         ) AS t1,
+         (
+             SELECT temperature, correction
+             FROM public.calc_temperatures_correction
+             WHERE temperature >= temp_input
+             ORDER BY temperature ASC
+             LIMIT 1
+         ) AS t2;
+
+    IF interp_data.x0 IS NULL OR interp_data.x1 IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    correction_result := interp_data.y0 +
+                         (interp_data.y1 - interp_data.y0) * (temp_input - interp_data.x0) / (interp_data.x1 - interp_data.x0);
+    RETURN correction_result;
+END;
+$$ LANGUAGE plpgsql;
+
+---------------------------------------------------------
+-- Примеры вызова функций и выборок
+---------------------------------------------------------
+SELECT public.fnHeaderGetPresure(730, 23);
+SELECT public.fnHeaderGetData();
+SELECT public.fnHeaderGetHeight(10);
+SELECT * FROM public.calc_temperatures_correction;
+SELECT public.interpolate_correction(23);
+
+---------------------------------------------------------
+-- Добавление дополнительных пользователей
+---------------------------------------------------------
+INSERT INTO public.employees (id, name, birthday, military_rank_id)
+VALUES
+    (2, 'Иванов Иван Иванович', '1985-03-15', 1),
+    (3, 'Петров Петр Петрович', '1970-07-10', 2),
+    (4, 'Александров Александр Александрович', '1958-09-23', 1),
+    (5, 'Дмитроооооооооооов Дмитрий Дмитриевич', '1912-01-05', 2);
+
+---------------------------------------------------------
+-- Генерация тестовых данных
+---------------------------------------------------------
+DO $$
+    DECLARE
+        user_id INTEGER;
+        measurment_type_id INTEGER;
+        param_id INTEGER;
+    BEGIN
+        FOR user_id IN 1..5 LOOP
+                FOR measurment_type_id IN 1..2 LOOP
+                        FOR i IN 1..100 LOOP
+                                INSERT INTO public.measurment_input_params (
+                                    measurment_type_id,
+                                    height,
+                                    temperature,
+                                    pressure,
+                                    wind_direction,
+                                    wind_speed
+                                )
+                                VALUES (
+                                           measurment_type_id,
+                                           100 + (random() * 400),
+                                           20 + (random() * 10),
+                                           1010 + (random() * 20),
+                                           random() * 360,
+                                           random() * 15
+                                       )
+                                RETURNING id INTO param_id;
+
+                                INSERT INTO public.measurment_baths (
+                                    emploee_id,
+                                    measurment_input_param_id,
+                                    started
+                                )
+                                VALUES (
+                                           user_id,
+                                           param_id,
+                                           NOW() - (random() * INTERVAL '30 days')
+                                       );
+                            END LOOP;
+                    END LOOP;
+            END LOOP;
+    END;
+$$;
+
+SELECT * FROM public.measurment_baths;
