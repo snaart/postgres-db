@@ -1,0 +1,1032 @@
+/**
+ * Комплексный SQL-скрипт для управления метеорологическими данными
+ * Схема: public
+ * 
+ * Скрипт выполняет:
+ * - Создание структуры данных для хранения и анализа метеорологических измерений
+ * - Определение функций для обработки и валидации данных
+ * - Создание типов данных для работы с расчетами
+ * - Наполнение таблиц начальными данными
+ */
+
+-- Создаем схему, если она не существует
+CREATE SCHEMA IF NOT EXISTS public;
+
+-- Основной блок инициализации структуры данных
+DO $$
+    DECLARE
+        v_start_time TIMESTAMP := clock_timestamp();
+    BEGIN
+        RAISE NOTICE 'Начинаю создание структуры базы данных (метеорологический модуль)...';
+        RAISE NOTICE '-------------------------------------------------------------';
+
+        -- Блок удаления существующих объектов
+        BEGIN
+            -- Сначала удаляем ограничения внешних ключей для предотвращения ошибок зависимостей
+            RAISE NOTICE 'Удаление внешних ключей...';
+            ALTER TABLE IF EXISTS public.measurment_input_params DROP CONSTRAINT IF EXISTS measurment_type_id_fk;
+            ALTER TABLE IF EXISTS public.employees DROP CONSTRAINT IF EXISTS military_rank_id_fk;
+            ALTER TABLE IF EXISTS public.measurment_baths DROP CONSTRAINT IF EXISTS measurment_input_param_id_fk;
+            ALTER TABLE IF EXISTS public.measurment_baths DROP CONSTRAINT IF EXISTS emploee_id_fk;
+
+            -- Удаление существующих таблиц в правильном порядке (сначала зависимые таблицы)
+            RAISE NOTICE 'Удаление таблиц...';
+            DROP TABLE IF EXISTS public.measurment_baths CASCADE;
+            DROP TABLE IF EXISTS public.measurment_input_params CASCADE;
+            DROP TABLE IF EXISTS public.employees CASCADE;
+            DROP TABLE IF EXISTS public.measurment_types CASCADE;
+            DROP TABLE IF EXISTS public.military_ranks CASCADE;
+            DROP TABLE IF EXISTS public.temperature CASCADE;
+            DROP TABLE IF EXISTS public.calc_temperatures_correction CASCADE;
+            DROP TABLE IF EXISTS public.temperature_deviations CASCADE;
+            DROP TABLE IF EXISTS public.temperature_deviations_plus CASCADE;
+            DROP TABLE IF EXISTS public.measure_settings CASCADE;
+            DROP TABLE IF EXISTS public.constants CASCADE;
+
+            -- Удаляем последовательности
+            RAISE NOTICE 'Удаление последовательностей...';
+            DROP SEQUENCE IF EXISTS public.measurment_input_params_seq;
+            DROP SEQUENCE IF EXISTS public.measurment_baths_seq;
+            DROP SEQUENCE IF EXISTS public.employees_seq;
+            DROP SEQUENCE IF EXISTS public.military_ranks_seq;
+            DROP SEQUENCE IF EXISTS public.measurment_types_seq;
+        END;
+
+        RAISE NOTICE '✓ Все устаревшие объекты успешно удалены';
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Создание справочных таблиц:';
+
+        -- СПРАВОЧНЫЕ ТАБЛИЦЫ
+
+        -- Справочник воинских званий
+        CREATE TABLE public.military_ranks (
+                                               id INTEGER PRIMARY KEY NOT NULL,
+                                               description VARCHAR(255) NOT NULL,
+                                               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE SEQUENCE public.military_ranks_seq START WITH 3;
+        ALTER TABLE public.military_ranks ALTER COLUMN id SET DEFAULT nextval('public.military_ranks_seq');
+
+        -- Начальное наполнение справочника
+        INSERT INTO public.military_ranks (id, description)
+        VALUES (1, 'Рядовой'), (2, 'Лейтенант');
+
+        RAISE NOTICE '✓ Создана таблица военных званий (military_ranks)';
+
+        -- Таблица сотрудников/специалистов
+        CREATE TABLE public.employees (
+                                          id INTEGER PRIMARY KEY NOT NULL,
+                                          name TEXT NOT NULL CHECK (length(trim(name)) > 2), -- Проверка на минимальную длину имени
+                                          birthday TIMESTAMP,
+                                          military_rank_id INTEGER,
+                                          active BOOLEAN DEFAULT TRUE, -- Новое поле для отметки активных сотрудников
+                                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE SEQUENCE public.employees_seq START WITH 2;
+        ALTER TABLE public.employees ALTER COLUMN id SET DEFAULT nextval('public.employees_seq');
+
+        -- Начальное наполнение данными
+        INSERT INTO public.employees (id, name, birthday, military_rank_id)
+        VALUES (1, 'Воловиков Александр Сергеевич', '1978-06-24', 2);
+
+        RAISE NOTICE '✓ Создана таблица сотрудников (employees)';
+
+        -- Справочник типов измерительных устройств
+        CREATE TABLE public.measurment_types (
+                                                 id INTEGER PRIMARY KEY NOT NULL,
+                                                 short_name VARCHAR(50) NOT NULL UNIQUE, -- Добавлен UNIQUE для предотвращения дублирования
+                                                 description TEXT,
+                                                 is_active BOOLEAN DEFAULT TRUE, -- Флаг активности устройства
+                                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE SEQUENCE public.measurment_types_seq START WITH 3;
+        ALTER TABLE public.measurment_types ALTER COLUMN id SET DEFAULT nextval('public.measurment_types_seq');
+
+        -- Начальное наполнение справочника
+        INSERT INTO public.measurment_types (id, short_name, description)
+        VALUES
+            (1, 'ДМК', 'Десантный метео комплекс'),
+            (2, 'ВР', 'Ветровое ружье');
+
+        RAISE NOTICE '✓ Создана таблица типов измерений (measurment_types)';
+
+        -- ТАБЛИЦЫ ДАННЫХ
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Создание основных таблиц данных:';
+
+        -- Таблица параметров измерений
+        CREATE TABLE public.measurment_input_params (
+                                                        id INTEGER PRIMARY KEY NOT NULL,
+                                                        measurment_type_id INTEGER NOT NULL,
+                                                        height NUMERIC(8,2) DEFAULT 0,
+                                                        temperature NUMERIC(8,2) DEFAULT 0,
+                                                        pressure NUMERIC(8,2) DEFAULT 0,
+                                                        wind_direction NUMERIC(8,2) DEFAULT 0,
+                                                        wind_speed NUMERIC(8,2) DEFAULT 0,
+                                                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE SEQUENCE public.measurment_input_params_seq START WITH 2;
+        ALTER TABLE public.measurment_input_params ALTER COLUMN id SET DEFAULT nextval('public.measurment_input_params_seq');
+
+        -- Индекс по типу измерения для ускорения поиска
+        CREATE INDEX idx_measurment_input_params_type_id ON public.measurment_input_params(measurment_type_id);
+        -- Композитный индекс для оптимизации частых запросов
+        CREATE INDEX idx_measurement_params_temp_press ON public.measurment_input_params(temperature, pressure);
+
+        -- Начальное наполнение данных
+        INSERT INTO public.measurment_input_params (id, measurment_type_id, height, temperature, pressure, wind_direction, wind_speed)
+        VALUES (1, 1, 100, 12, 34, 0.2, 45);
+
+        RAISE NOTICE '✓ Создана таблица параметров измерений (measurment_input_params)';
+
+        -- Таблица истории измерений
+        CREATE TABLE public.measurment_baths (
+                                                 id INTEGER PRIMARY KEY NOT NULL,
+                                                 emploee_id INTEGER NOT NULL,
+                                                 measurment_input_param_id INTEGER NOT NULL,
+                                                 started TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                 notes TEXT, -- Новое поле для заметок
+                                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE SEQUENCE public.measurment_baths_seq START WITH 2;
+        ALTER TABLE public.measurment_baths ALTER COLUMN id SET DEFAULT nextval('public.measurment_baths_seq');
+
+        -- Индексы для оптимизации выборок
+        CREATE INDEX idx_measurment_baths_employee ON public.measurment_baths(emploee_id);
+        CREATE INDEX idx_measurment_baths_param ON public.measurment_baths(measurment_input_param_id);
+        CREATE INDEX idx_measurment_baths_started ON public.measurment_baths(started);
+
+        -- Начальное наполнение таблицы
+        INSERT INTO public.measurment_baths (id, emploee_id, measurment_input_param_id)
+        VALUES (1, 1, 1);
+
+        RAISE NOTICE '✓ Создана таблица истории измерений (measurment_baths)';
+
+        -- ТАБЛИЦЫ ДЛЯ РАСЧЕТОВ
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Создание вспомогательных таблиц и структур для расчетов:';
+
+        -- Таблица коррекции температур
+        CREATE TABLE public.calc_temperatures_correction (
+                                                             temperature NUMERIC(8,2) PRIMARY KEY,
+                                                             correction NUMERIC(8,2) NOT NULL,
+                                                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Начальное наполнение данными
+        INSERT INTO public.calc_temperatures_correction (temperature, correction)
+        VALUES
+            (0, 0.5), (5, 0.5), (10, 1), (20, 1),
+            (25, 2), (30, 3.5), (40, 4.5);
+
+        RAISE NOTICE '✓ Создана таблица коррекции температур (calc_temperatures_correction)';
+
+        -- Создание пользовательского типа для интерполяции
+        DROP TYPE IF EXISTS public.interpolation_type CASCADE;
+        CREATE TYPE public.interpolation_type AS (
+                                                     x0 NUMERIC(8,2),
+                                                     x1 NUMERIC(8,2),
+                                                     y0 NUMERIC(8,2),
+                                                     y1 NUMERIC(8,2)
+                                                 );
+
+        RAISE NOTICE '✓ Создан тип интерполяции (interpolation_type)';
+
+        -- Таблица констант
+        CREATE TABLE public.constants (
+                                          key VARCHAR(30) PRIMARY KEY,
+                                          value TEXT NOT NULL,
+                                          description TEXT, -- Добавлено описание для каждой константы
+                                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Начальное наполнение констант
+        INSERT INTO public.constants (key, value, description)
+        VALUES
+            ('const_pressure', '750', 'Стандартное атмосферное давление в мм рт. ст.'),
+            ('const_temperature', '15.9', 'Стандартная температура в градусах Цельсия');
+
+        RAISE NOTICE '✓ Создана таблица констант (constants)';
+
+        -- Таблица настроек измерений
+        CREATE TABLE public.measure_settings (
+                                                 param VARCHAR(50) PRIMARY KEY,
+                                                 min_value NUMERIC NOT NULL,
+                                                 max_value NUMERIC NOT NULL,
+                                                 unit VARCHAR(20) NOT NULL,
+                                                 description TEXT, -- Добавлено описание параметра
+                                                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        RAISE NOTICE '✓ Создана таблица настроек измерений (measure_settings)';
+
+        -- Таблица температурных отклонений (отрицательные)
+        CREATE TABLE public.temperature_deviations (
+                                                       height INTEGER PRIMARY KEY,
+                                                       dev_1 NUMERIC,
+                                                       dev_2 NUMERIC,
+                                                       dev_3 NUMERIC,
+                                                       dev_4 NUMERIC,
+                                                       dev_5 NUMERIC,
+                                                       dev_6 NUMERIC,
+                                                       dev_7 NUMERIC,
+                                                       dev_8 NUMERIC,
+                                                       dev_9 NUMERIC,
+                                                       dev_10 NUMERIC,
+                                                       dev_20 NUMERIC,
+                                                       dev_30 NUMERIC,
+                                                       dev_40 NUMERIC,
+                                                       dev_50 NUMERIC,
+                                                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        RAISE NOTICE '✓ Создана таблица температурных отклонений (temperature_deviations)';
+
+        -- Таблица температурных отклонений (положительные)
+        CREATE TABLE public.temperature_deviations_plus (
+                                                            height INTEGER PRIMARY KEY,
+                                                            dev_1 NUMERIC,
+                                                            dev_2 NUMERIC,
+                                                            dev_3 NUMERIC,
+                                                            dev_4 NUMERIC,
+                                                            dev_5 NUMERIC,
+                                                            dev_6 NUMERIC,
+                                                            dev_7 NUMERIC,
+                                                            dev_8 NUMERIC,
+                                                            dev_9 NUMERIC,
+                                                            dev_10 NUMERIC,
+                                                            dev_20 NUMERIC,
+                                                            dev_30 NUMERIC,
+                                                            dev_40 NUMERIC,
+                                                            dev_50 NUMERIC,
+                                                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        RAISE NOTICE '✓ Создана таблица положительных температурных отклонений (temperature_deviations_plus)';
+
+        -- Установка внешних ключей и связей между таблицами
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Установка внешних ключей и связей:';
+
+        -- Связь между измерениями и сотрудниками
+        ALTER TABLE public.measurment_baths
+            ADD CONSTRAINT emploee_id_fk
+                FOREIGN KEY (emploee_id)
+                    REFERENCES public.employees (id)
+                    ON DELETE RESTRICT
+                    ON UPDATE CASCADE;
+
+        -- Связь между измерениями и параметрами
+        ALTER TABLE public.measurment_baths
+            ADD CONSTRAINT measurment_input_param_id_fk
+                FOREIGN KEY (measurment_input_param_id)
+                    REFERENCES public.measurment_input_params (id)
+                    ON DELETE RESTRICT
+                    ON UPDATE CASCADE;
+
+        -- Связь между параметрами и типами измерений
+        ALTER TABLE public.measurment_input_params
+            ADD CONSTRAINT measurment_type_id_fk
+                FOREIGN KEY (measurment_type_id)
+                    REFERENCES public.measurment_types (id)
+                    ON DELETE RESTRICT
+                    ON UPDATE CASCADE;
+
+        -- Связь между сотрудниками и званиями
+        ALTER TABLE public.employees
+            ADD CONSTRAINT military_rank_id_fk
+                FOREIGN KEY (military_rank_id)
+                    REFERENCES public.military_ranks (id)
+                    ON DELETE SET NULL
+                    ON UPDATE CASCADE;
+
+        RAISE NOTICE '✓ Все внешние ключи и связи установлены';
+
+        -- Вывод сводной информации о времени выполнения инициализации
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Инициализация структуры данных успешно завершена';
+        RAISE NOTICE 'Время выполнения: % мс', EXTRACT(EPOCH FROM (clock_timestamp() - v_start_time)) * 1000;
+        RAISE NOTICE '-------------------------------------------------------------';
+    END;
+$$;
+
+-- Наполнение таблицы настроек измерений
+DO $$
+    BEGIN
+        -- Проверка, есть ли уже записи в таблице
+        IF (SELECT COUNT(*) FROM public.measure_settings) = 0 THEN
+            -- Вставка настроек измерений
+            INSERT INTO public.measure_settings (param, min_value, max_value, unit, description)
+            VALUES
+                ('Высота метеопоста', -10000, 10000, 'м', 'Высота расположения метеопоста над уровнем моря'),
+                ('Температура', -58, 58, '°C', 'Температура воздуха в градусах Цельсия'),
+                ('Давление', 500, 900, 'мм рт. ст.', 'Атмосферное давление в миллиметрах ртутного столба'),
+                ('Направление ветра', 0, 59, '°', 'Направление ветра в градусах'),
+                ('Скорость ветра', 0, 15, 'м/c', 'Скорость ветра в метрах в секунду'),
+                ('Дальность сноса пуль', 0, 150, 'м', 'Дальность сноса пуль в метрах');
+
+            RAISE NOTICE 'Данные настроек измерений успешно добавлены';
+        ELSE
+            RAISE NOTICE 'Настройки измерений уже существуют, пропускаем вставку';
+        END IF;
+    END;
+$$;
+
+-- Наполнение таблиц температурных отклонений
+DO $$
+    BEGIN
+        -- Проверка, есть ли уже записи в таблице отрицательных отклонений
+        IF (SELECT COUNT(*) FROM public.temperature_deviations) = 0 THEN
+            -- Вставка данных отрицательных отклонений
+            INSERT INTO public.temperature_deviations
+            VALUES
+                (200, -1, -2, -3, -4, -5, -6, -7, -8, -8, -9, -20, -29, -39, -49, NOW(), NOW()),
+                (400, -1, -2, -3, -4, -5, -6, -6, -7, -8, -9, -19, -29, -38, -48, NOW(), NOW()),
+                (800, -1, -2, -3, -4, -5, -6, -6, -7, -7, -8, -18, -28, -37, -46, NOW(), NOW()),
+                (1200, -1, -2, -3, -4, -5, -5, -5, -6, -7, -8, -17, -26, -35, -44, NOW(), NOW()),
+                (1600, -1, -2, -3, -3, -4, -4, -5, -6, -7, -7, -17, -25, -34, -42, NOW(), NOW()),
+                (2000, -1, -2, -3, -3, -4, -4, -5, -6, -6, -7, -16, -24, -32, -40, NOW(), NOW()),
+                (2400, -1, -2, -2, -3, -4, -4, -5, -5, -6, -7, -15, -23, -31, -38, NOW(), NOW()),
+                (3000, -1, -2, -2, -3, -4, -4, -4, -5, -5, -6, -15, -22, -30, -37, NOW(), NOW()),
+                (4000, -1, -2, -2, -3, -4, -4, -4, -4, -5, -6, -14, -20, -27, -34, NOW(), NOW());
+
+            RAISE NOTICE 'Данные отрицательных температурных отклонений успешно добавлены';
+        ELSE
+            RAISE NOTICE 'Данные отрицательных температурных отклонений уже существуют, пропускаем вставку';
+        END IF;
+
+        -- Проверка, есть ли уже записи в таблице положительных отклонений
+        IF (SELECT COUNT(*) FROM public.temperature_deviations_plus) = 0 THEN
+            -- Вставка данных положительных отклонений
+            INSERT INTO public.temperature_deviations_plus
+            VALUES
+                (200, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (400, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (800, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (1200, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (1600, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (2000, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (2400, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (3000, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW()),
+                (4000, 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 20, 30, NULL, NULL, NOW(), NOW());
+
+            RAISE NOTICE 'Данные положительных температурных отклонений успешно добавлены';
+        ELSE
+            RAISE NOTICE 'Данные положительных температурных отклонений уже существуют, пропускаем вставку';
+        END IF;
+    END;
+$$;
+
+-- РАЗДЕЛ СОЗДАНИЯ ФУНКЦИЙ И ПРОЦЕДУР
+
+/**
+ * БЛОК ФУНКЦИЙ ДЛЯ ВАЛИДАЦИИ ПАРАМЕТРОВ ИЗМЕРЕНИЙ
+ */
+
+/**
+ * Пользовательский тип для возврата валидированного параметра
+ * Содержит числовое значение и тип параметра
+ */
+DROP TYPE IF EXISTS public.measure_type CASCADE;
+CREATE TYPE public.measure_type AS (
+                                       param NUMERIC,
+                                       ttype TEXT
+                                   );
+
+/**
+ * Функция для проверки параметра измерения на соответствие допустимым границам
+ * 
+ * @param type_param Название типа параметра (из таблицы measure_settings)
+ * @param value_param Числовое значение параметра
+ * @return Тип measure_type с проверенным значением или NULL в случае ошибки
+ */
+CREATE OR REPLACE FUNCTION public.get_measure_setting(
+    p_type_param VARCHAR,
+    p_value_param NUMERIC
+)
+    RETURNS public.measure_type AS $$
+DECLARE
+    v_min_value NUMERIC;
+    v_max_value NUMERIC;
+    v_result public.measure_type;
+BEGIN
+    -- Проверка входного параметра на NULL
+    IF p_value_param IS NULL THEN
+        RAISE EXCEPTION 'Ошибка валидации: Передано пустое значение (NULL)';
+    END IF;
+
+    -- Получаем минимальное и максимальное значение для параметра из настроек
+    SELECT min_value, max_value
+    INTO v_min_value, v_max_value
+    FROM public.measure_settings
+    WHERE param = p_type_param;
+
+    -- Проверка на существование параметра в настройках
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Ошибка валидации: Параметр "%" не найден в настройках', p_type_param;
+    END IF;
+
+    -- Проверка на диапазон допустимых значений
+    IF p_value_param < v_min_value OR p_value_param > v_max_value THEN
+        -- Возвращаем NULL, что будет означать ошибку
+        RETURN NULL;
+    END IF;
+
+    -- Если проверки пройдены, возвращаем результат
+    v_result.param := p_value_param;
+    v_result.ttype := p_type_param;
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Логирование ошибки
+        RAISE WARNING 'Ошибка при валидации параметра %: %', p_type_param, SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * БЛОК ФУНКЦИЙ ДЛЯ РАБОТЫ С ЗАГОЛОВКАМИ
+ */
+
+/**
+ * Функция получения текущей даты в специальном формате для заголовка
+ * 
+ * @return Строка с форматированной датой DDHHL
+ */
+CREATE OR REPLACE FUNCTION public.get_header_date()
+    RETURNS TEXT AS $$
+DECLARE
+    v_result TEXT;
+BEGIN
+    -- Форматируем дату и время: день месяца + час + первая цифра минут
+    v_result := TO_CHAR(NOW(), 'DDHH') || LEFT(TO_CHAR(NOW(), 'MI'), 1);
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * Функция форматирования высоты для заголовка
+ * 
+ * @param p_height Высота в метрах
+ * @return Строка с форматированной высотой (4 цифры с ведущими нулями)
+ */
+CREATE OR REPLACE FUNCTION public.get_header_height(p_height INTEGER)
+    RETURNS TEXT AS $$
+DECLARE
+    v_result TEXT;
+BEGIN
+    -- Проверка на допустимое значение высоты
+    IF p_height IS NULL THEN
+        RAISE EXCEPTION 'Ошибка форматирования высоты: значение не может быть NULL';
+    END IF;
+
+    -- Форматируем высоту в виде 4 цифр с ведущими нулями
+    v_result := LPAD(p_height::TEXT, 4, '0');
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * Функция интерполяции для коррекции температуры
+ * 
+ * @param p_temp_input Температура, для которой требуется рассчитать коррекцию
+ * @return Значение коррекции температуры
+ */
+CREATE OR REPLACE FUNCTION public.interpolate_temp_correction(p_temp_input NUMERIC)
+    RETURNS NUMERIC AS $$
+DECLARE
+    v_interp_data public.interpolation_type;
+    v_correction NUMERIC;
+BEGIN
+    -- Сначала проверяем, есть ли точное совпадение в таблице коррекций
+    SELECT correction INTO v_correction
+    FROM public.calc_temperatures_correction
+    WHERE temperature = p_temp_input;
+
+    -- Если нашли точное значение, возвращаем его
+    IF FOUND THEN
+        RETURN v_correction;
+    END IF;
+
+    -- Иначе выполняем линейную интерполяцию между ближайшими значениями
+    SELECT
+        t1.temperature AS x0,
+        t2.temperature AS x1,
+        t1.correction AS y0,
+        t2.correction AS y1
+    INTO v_interp_data
+    FROM
+        (SELECT temperature, correction
+         FROM public.calc_temperatures_correction
+         WHERE temperature <= p_temp_input
+         ORDER BY temperature DESC
+         LIMIT 1) AS t1,
+        (SELECT temperature, correction
+         FROM public.calc_temperatures_correction
+         WHERE temperature >= p_temp_input
+         ORDER BY temperature ASC
+         LIMIT 1) AS t2;
+
+    -- Проверка на наличие данных для интерполяции
+    IF v_interp_data.x0 IS NULL OR v_interp_data.x1 IS NULL THEN
+        RAISE WARNING 'Невозможно выполнить интерполяцию для температуры %: недостаточно данных', p_temp_input;
+        RETURN NULL;
+    END IF;
+
+    -- Выполняем линейную интерполяцию
+    v_correction := v_interp_data.y0 +
+                    (v_interp_data.y1 - v_interp_data.y0) *
+                    (p_temp_input - v_interp_data.x0) /
+                    (v_interp_data.x1 - v_interp_data.x0);
+
+    RETURN v_correction;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при интерполяции температурной коррекции: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * Функция форматирования показаний давления для заголовка
+ * с учетом отклонения от стандартного давления
+ * 
+ * @param p_pressure Давление в мм рт.ст.
+ * @param p_temperature Температура в градусах Цельсия
+ * @return Строка с форматированным представлением давления и температурной поправки
+ */
+CREATE OR REPLACE FUNCTION public.get_header_pressure(
+    p_pressure NUMERIC,
+    p_temperature NUMERIC
+)
+    RETURNS TEXT AS $$
+DECLARE
+    v_std_pressure NUMERIC;
+    v_std_temperature NUMERIC;
+    v_pressure_diff NUMERIC;
+    v_pressure_int INTEGER;
+    v_result TEXT;
+    v_temp_correction NUMERIC;
+    v_adjusted_temp NUMERIC;
+    v_temp_diff INTEGER;
+BEGIN
+    -- Проверка входных данных
+    IF p_pressure IS NULL OR p_temperature IS NULL THEN
+        RAISE EXCEPTION 'Ошибка форматирования давления: значения не могут быть NULL';
+    END IF;
+
+    -- Получаем стандартное давление из констант
+    SELECT value::NUMERIC INTO v_std_pressure
+    FROM public.constants
+    WHERE key = 'const_pressure';
+
+    -- Вычисляем разницу между текущим и стандартным давлением
+    v_pressure_diff := p_pressure - v_std_pressure;
+    v_pressure_int := v_pressure_diff::INTEGER;
+
+    -- Получаем коррекцию температуры
+    v_temp_correction := public.interpolate_temp_correction(p_temperature);
+
+    -- Корректируем температуру
+    v_adjusted_temp := p_temperature + v_temp_correction;
+
+    -- Получаем стандартную температуру
+    SELECT value::NUMERIC INTO v_std_temperature
+    FROM public.constants
+    WHERE key = 'const_temperature';
+
+    -- Вычисляем разницу температур с округлением
+    v_temp_diff := ROUND(v_adjusted_temp - v_std_temperature)::INTEGER;
+
+    -- Форматируем результат в зависимости от знака разницы давления
+    IF v_pressure_int >= 0 THEN
+        -- Положительная разница (давление выше стандартного)
+        v_result := LPAD(v_pressure_int::TEXT, 3, '0') || LPAD(v_temp_diff::TEXT, 2, '0');
+    ELSE
+        -- Отрицательная разница (давление ниже стандартного)
+        v_result := '5' || LPAD(ABS(v_pressure_int)::TEXT, 2, '0') || LPAD(v_temp_diff::TEXT, 2, '0');
+    END IF;
+
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при форматировании давления: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * БЛОК ФУНКЦИЙ ДЛЯ РАСЧЕТА ТЕМПЕРАТУРНЫХ ОТКЛОНЕНИЙ
+ */
+
+/**
+ * Функция для получения значения температурного отклонения
+ * в зависимости от высоты и значения
+ * 
+ * @param p_height Высота в метрах
+ * @param p_value Значение температуры
+ * @param p_is_positive Флаг знака температуры (true = положительная, false = отрицательная)
+ * @return Значение отклонения
+ */
+CREATE OR REPLACE FUNCTION public.get_temperature_deviation_value(
+    p_height INTEGER,
+    p_value INTEGER,
+    p_is_positive BOOLEAN
+)
+    RETURNS NUMERIC AS $$
+DECLARE
+    v_result NUMERIC;
+    v_table_name TEXT;
+BEGIN
+    -- Определяем таблицу в зависимости от знака
+    v_table_name := CASE
+                        WHEN p_is_positive THEN 'public.temperature_deviations_plus'
+                        ELSE 'public.temperature_deviations'
+        END;
+
+    -- Формируем динамический SQL для получения нужного значения отклонения
+    IF p_value <= 10 THEN
+        EXECUTE format('
+            SELECT CASE %L
+                WHEN 1 THEN dev_1
+                WHEN 2 THEN dev_2
+                WHEN 3 THEN dev_3
+                WHEN 4 THEN dev_4
+                WHEN 5 THEN dev_5
+                WHEN 6 THEN dev_6
+                WHEN 7 THEN dev_7
+                WHEN 8 THEN dev_8
+                WHEN 9 THEN dev_9
+                WHEN 10 THEN dev_10
+            END
+            FROM %s
+            WHERE height = %L',
+                       p_value, v_table_name, p_height)
+            INTO v_result;
+    ELSIF p_value = 20 THEN
+        EXECUTE format('SELECT dev_20 FROM %s WHERE height = %L', v_table_name, p_height)
+            INTO v_result;
+    ELSIF p_value = 30 THEN
+        EXECUTE format('SELECT dev_30 FROM %s WHERE height = %L', v_table_name, p_height)
+            INTO v_result;
+    ELSIF p_value = 40 AND NOT p_is_positive THEN
+        EXECUTE format('SELECT dev_40 FROM %s WHERE height = %L', v_table_name, p_height)
+            INTO v_result;
+    ELSIF p_value = 50 AND NOT p_is_positive THEN
+        EXECUTE format('SELECT dev_50 FROM %s WHERE height = %L', v_table_name, p_height)
+            INTO v_result;
+    ELSE
+        v_result := NULL;
+    END IF;
+
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при получении значения отклонения: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+/**
+ * Функция для расчета температурного отклонения
+ * 
+ * @param p_height Высота в метрах
+ * @param p_temperature Температура в градусах Цельсия
+ * @return Массив с результатами расчета [десятки, единицы, отклонение_десятки, отклонение_единицы, итог]
+ */
+CREATE OR REPLACE FUNCTION public.calculate_temperature_deviation(
+    p_height INTEGER,
+    p_temperature NUMERIC
+)
+    RETURNS NUMERIC[] AS $$
+DECLARE
+    v_tens INTEGER;          -- Десятки в температуре
+    v_ones INTEGER;          -- Единицы в температуре
+    v_dev_tens NUMERIC;      -- Отклонение для десятков
+    v_dev_ones NUMERIC;      -- Отклонение для единиц
+    v_result NUMERIC;        -- Итоговое отклонение
+    v_is_positive BOOLEAN;   -- Флаг знака температуры
+BEGIN
+    -- Определяем знак температуры
+    v_is_positive := (p_temperature >= 0);
+
+    -- Разбиваем температуру на десятки и единицы
+    v_tens := CASE
+                  WHEN p_temperature < 0 THEN
+                      GREATEST(FLOOR(p_temperature / 10) * 10, -50)  -- Ограничиваем для отрицательных значений
+                  ELSE
+                      FLOOR(p_temperature / 10) * 10
+        END;
+
+    v_ones := ABS(p_temperature - v_tens);
+
+    -- Получаем отклонения для десятков и единиц
+    v_dev_tens := public.get_temperature_deviation_value(p_height, ABS(v_tens), v_is_positive);
+    v_dev_ones := public.get_temperature_deviation_value(p_height, ABS(v_ones), v_is_positive);
+
+    -- Если одно из отклонений NULL, значит не можем провести расчет
+    IF v_dev_tens IS NULL OR v_dev_ones IS NULL THEN
+        RAISE WARNING 'Невозможно рассчитать температурное отклонение для высоты % и температуры %: недостаточно данных',
+            p_height, p_temperature;
+        RETURN NULL;
+    END IF;
+
+    -- Вычисляем итоговое отклонение
+    v_result := v_dev_tens + v_dev_ones;
+
+    -- Корректируем результат для отрицательных температур
+    IF NOT v_is_positive THEN
+        v_result := ABS(v_result) + 50;
+    END IF;
+
+    -- Возвращаем массив с результатами расчета
+    RETURN ARRAY[ABS(v_tens), ABS(v_ones), v_dev_tens, v_dev_ones, v_result];
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при расчете температурного отклонения: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- СОЗДАНИЕ ТРИГГЕРОВ ДЛЯ ОБНОВЛЕНИЯ ВРЕМЕННЫХ МЕТОК
+
+-- Функция для автоматического обновления временной метки updated_at
+CREATE OR REPLACE FUNCTION public.update_timestamp()
+    RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Создаем триггеры для обновления временных меток в таблицах
+DO $$
+    DECLARE
+        v_table TEXT;
+        v_tables TEXT[] := ARRAY[
+            'military_ranks',
+            'employees',
+            'measurment_types',
+            'calc_temperatures_correction',
+            'constants',
+            'measure_settings',
+            'temperature_deviations',
+            'temperature_deviations_plus'
+            ];
+    BEGIN
+        FOREACH v_table IN ARRAY v_tables LOOP
+                EXECUTE format('
+            DROP TRIGGER IF EXISTS update_%s_timestamp ON public.%s;
+            CREATE TRIGGER update_%s_timestamp
+            BEFORE UPDATE ON public.%s
+            FOR EACH ROW
+            EXECUTE FUNCTION public.update_timestamp();
+        ', v_table, v_table, v_table, v_table);
+            END LOOP;
+    END;
+$$;
+
+-- ДОБАВЛЕНИЕ ТЕСТОВЫХ ДАННЫХ
+
+-- Добавление сотрудников
+INSERT INTO public.employees (id, name, birthday, military_rank_id)
+VALUES
+    (2, 'Иванов Иван Иванович', '1985-03-15', 1),
+    (3, 'Петров Петр Петрович', '1990-07-10', 2),
+    (4, 'Сидоров Александр Александрович', '1982-09-23', 1),
+    (5, 'Кузнецов Дмитрий Дмитриевич', '1992-01-05', 2);
+
+-- Генерация тестовых данных измерений
+DO $$
+    DECLARE
+        v_user_id INTEGER;
+        v_type_id INTEGER;
+        v_param_id INTEGER;
+        v_batch_size INTEGER := 20; -- Оптимизировано для более эффективной вставки
+    BEGIN
+        -- Используем транзакцию для оптимизации вставки
+        FOR v_user_id IN 1..5 LOOP
+                FOR v_type_id IN 1..2 LOOP
+                        -- Используем пакетную вставку для параметров и измерений
+                        FOR i IN 1..5 LOOP -- 5 пакетов по 20 записей = 100 записей для каждой комбинации
+                        -- Создаем временную таблицу для хранения сгенерированных ID
+                                CREATE TEMP TABLE IF NOT EXISTS temp_params_batch (id INTEGER) ON COMMIT DROP;
+
+                                -- Вставляем пакет параметров
+                                WITH inserted_params AS (
+                                    INSERT INTO public.measurment_input_params (
+                                                                                measurment_type_id,
+                                                                                height,
+                                                                                temperature,
+                                                                                pressure,
+                                                                                wind_direction,
+                                                                                wind_speed
+                                        )
+                                        SELECT
+                                            v_type_id,
+                                            100 + (random() * 400),
+                                            20 + (random() * 10),
+                                            500 + (random() * 20),
+                                            random() * 80,
+                                            random() * 15
+                                        FROM generate_series(1, v_batch_size)
+                                        RETURNING id
+                                )
+                                INSERT INTO temp_params_batch
+                                SELECT id FROM inserted_params;
+
+                                -- Вставляем связанные записи измерений
+                                INSERT INTO public.measurment_baths (
+                                    emploee_id,
+                                    measurment_input_param_id,
+                                    started
+                                )
+                                SELECT
+                                    v_user_id,
+                                    id,
+                                    NOW() - (random() * INTERVAL '30 days')
+                                FROM temp_params_batch;
+
+                                -- Очищаем временную таблицу
+                                TRUNCATE temp_params_batch;
+                            END LOOP;
+                    END LOOP;
+            END LOOP;
+
+        RAISE NOTICE 'Сгенерировано тестовых данных: % записей', 5 * 2 * 5 * v_batch_size;
+    END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.get_errors_by_employee()
+    RETURNS TABLE (
+                      employee_name TEXT,
+                      position_name VARCHAR(255),
+                      total_measurements BIGINT,
+                      error_count BIGINT,
+                      error_percentage NUMERIC
+                  ) AS $$
+BEGIN
+    RETURN QUERY
+        WITH measurements AS (
+            -- Объединяем данные измерений
+            SELECT
+                mb.emploee_id,
+                mip.temperature,
+                mip.pressure,
+                mip.wind_direction,
+                mip.wind_speed
+            FROM public.measurment_baths mb
+                     JOIN public.measurment_input_params mip
+                          ON mb.measurment_input_param_id = mip.id
+        ),
+             measurement_errors AS (
+                 -- Подсчитываем ошибки для каждого измерения
+                 SELECT
+                     m.emploee_id,
+                     CASE
+                         WHEN public.get_measure_setting('Температура', m.temperature) IS NULL THEN 1
+                         ELSE 0
+                         END +
+                     CASE
+                         WHEN public.get_measure_setting('Давление', m.pressure) IS NULL THEN 1
+                         ELSE 0
+                         END +
+                     CASE
+                         WHEN public.get_measure_setting('Направление ветра', m.wind_direction) IS NULL THEN 1
+                         ELSE 0
+                         END +
+                     CASE
+                         WHEN public.get_measure_setting('Скорость ветра', m.wind_speed) IS NULL THEN 1
+                         ELSE 0
+                         END AS error_count
+                 FROM measurements m
+             ),
+             employee_error_stats AS (
+                 -- Агрегируем ошибки по сотрудникам
+                 SELECT
+                     emp_id.emploee_id,
+                     COUNT(*) AS total_measurements,
+                     SUM(emp_id.error_count) AS total_errors
+                 FROM measurement_errors emp_id
+                 GROUP BY emp_id.emploee_id
+             )
+        -- Формируем финальный результат с именами сотрудников и процентом ошибок
+        SELECT
+            e.name AS employee_name,
+            mr.description AS position_name,
+            COALESCE(ees.total_measurements, 0) AS total_measurements,
+            COALESCE(ees.total_errors, 0) AS error_count,
+            CASE
+                WHEN COALESCE(ees.total_measurements, 0) > 0
+                    THEN ROUND((COALESCE(ees.total_errors, 0)::NUMERIC / ees.total_measurements) * 100, 2)
+                ELSE 0
+                END AS error_percentage
+        FROM public.employees e
+                 LEFT JOIN public.military_ranks mr
+                           ON e.military_rank_id = mr.id
+                 LEFT JOIN employee_error_stats ees
+                           ON e.id = ees.emploee_id
+        ORDER BY error_percentage DESC, total_measurements DESC;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ПОЛЕЗНЫЕ ВСПОМОГАТЕЛЬНЫЕ ПРЕДСТАВЛЕНИЯ
+
+-- Представление для отображения сводной информации о последних измерениях
+CREATE OR REPLACE VIEW public.recent_measurements AS
+SELECT
+    mb.id AS measurement_id,
+    mb.started AS measurement_date,
+    e.name AS employee_name,
+    mr.description AS military_rank,
+    mt.short_name AS device_type,
+    mip.height,
+    mip.temperature,
+    mip.pressure,
+    mip.wind_direction,
+    mip.wind_speed,
+    public.get_header_pressure(mip.pressure, mip.temperature) AS formatted_pressure,
+    CASE
+        WHEN public.get_measure_setting('Температура', mip.temperature) IS NULL OR
+             public.get_measure_setting('Давление', mip.pressure) IS NULL OR
+             public.get_measure_setting('Направление ветра', mip.wind_direction) IS NULL OR
+             public.get_measure_setting('Скорость ветра', mip.wind_speed) IS NULL
+            THEN TRUE
+        ELSE FALSE
+        END AS has_errors
+FROM
+    public.measurment_baths mb
+        JOIN
+    public.employees e ON mb.emploee_id = e.id
+        JOIN
+    public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+        JOIN
+    public.military_ranks mr ON e.military_rank_id = mr.id
+        JOIN
+    public.measurment_types mt ON mip.measurment_type_id = mt.id
+ORDER BY
+    mb.started DESC
+LIMIT
+    1000;
+
+COMMENT ON VIEW public.recent_measurements IS 'Представление последних 1000 измерений с детальной информацией';
+
+-- Представление для отображения статистики по типам устройств
+CREATE OR REPLACE VIEW public.device_type_stats AS
+SELECT
+    mt.id AS device_type_id,
+    mt.short_name AS device_name,
+    mt.description,
+    COUNT(mip.id) AS total_measurements,
+    AVG(mip.temperature) AS avg_temperature,
+    AVG(mip.pressure) AS avg_pressure,
+    AVG(mip.wind_speed) AS avg_wind_speed,
+    MIN(mb.started) AS first_measurement,
+    MAX(mb.started) AS last_measurement
+FROM
+    public.measurment_types mt
+        LEFT JOIN
+    public.measurment_input_params mip ON mt.id = mip.measurment_type_id
+        LEFT JOIN
+    public.measurment_baths mb ON mip.id = mb.measurment_input_param_id
+GROUP BY
+    mt.id, mt.short_name, mt.description
+ORDER BY
+    total_measurements DESC;
+
+COMMENT ON VIEW public.device_type_stats IS 'Статистика использования различных типов измерительных устройств';
+
+-- ПРИМЕРЫ ЗАПРОСОВ И ИСПОЛЬЗОВАНИЯ ФУНКЦИЙ
+
+-- Примеры вызова функций заголовков
+-- SELECT public.get_header_date();
+-- SELECT public.get_header_height(100);
+-- SELECT public.get_header_pressure(780, 27);
+
+-- Примеры использования функции интерполяции
+-- SELECT public.interpolate_temp_correction(23);
+
+-- Примеры использования функции расчета температурных отклонений
+-- SELECT public.calculate_temperature_deviation(200, 40);
+-- SELECT public.calculate_temperature_deviation(200, -15);
+
+-- Пример запроса для анализа ошибочных данных с использованием функции
+-- SELECT * FROM public.get_errors_by_employee();
+
+-- Примеры запросов к представлениям
+-- SELECT * FROM public.recent_measurements LIMIT 10;
+-- SELECT * FROM public.device_type_stats;
