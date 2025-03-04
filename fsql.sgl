@@ -1043,63 +1043,165 @@ CREATE TABLE IF NOT EXISTS public.wind_average_corrections (
                                                                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Пользовательский тип для результата проверки входных параметров
+DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'check_result') THEN
+            CREATE TYPE public.check_result AS (
+                                                   is_check BOOLEAN,
+                                                   error_message TEXT
+                                               );
+        END IF;
+    END
+$$;
+
+-- Таблица дрейфа пули под воздействием ветра (исправленная, использует массивы)
 CREATE TABLE public.wind_bullet_drift (
-                                          standard_height INT PRIMARY KEY,
-                                          d40  INT,
-                                          d50  INT,
-                                          d60  INT,
-                                          d70  INT,
-                                          d80  INT,
-                                          d90  INT,
-                                          d100 INT,
-                                          d110 INT,
-                                          d120 INT,
-                                          d130 INT,
-                                          d140 INT,
-                                          d150 INT,
-                                          direction_angle_inc VARCHAR(5)
+                                          standard_height INTEGER PRIMARY KEY,
+                                          distance_values INTEGER[] NOT NULL,  -- Массив значений дистанций
+                                          drift_values INTEGER[] NOT NULL,     -- Массив значений сносов
+                                          direction_angle_inc VARCHAR(5) NOT NULL,
+                                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_wind_bullet_drift_height ON public.wind_bullet_drift(standard_height);
+
+-- Наполнение таблицы wind_bullet_drift данными с использованием массивов
 INSERT INTO public.wind_bullet_drift
-(standard_height, d40, d50, d60, d70, d80, d90, d100, d110, d120, d130, d140, d150, direction_angle_inc)
+(standard_height, distance_values, drift_values, direction_angle_inc)
 VALUES
-    (200, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 9, 11, '0-00'),
-    (300, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 10, 12, '1-00'),
-    (400, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, '2-00'),
-    (500, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, '3-00'),
-    (600, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, '4-00'),
-    (700, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '5-00'),
-    (800, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '6-00'),
-    (900, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '7-00'),
-    (1000, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '8-00'),
-    (1100, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '9-00'),
-    (1200, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '10-00'),
-    (1300, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '11-00'),
-    (1400, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '12-00'),
-    (1500, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '12-00');
-
-
-CREATE INDEX IF NOT EXISTS idx_wind_bullet_drift_height ON public.wind_bullet_drift(standard_height);
+    (200, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 9, 11], '0-00'),
+    (300, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 10, 12], '1-00'),
+    (400, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13], '2-00'),
+    (500, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13], '3-00'),
+    (600, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13], '4-00'),
+    (700, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '5-00'),
+    (800, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '6-00'),
+    (900, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '7-00'),
+    (1000, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '8-00'),
+    (1100, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '9-00'),
+    (1200, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '10-00'),
+    (1300, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '11-00'),
+    (1400, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '12-00'),
+    (1500, ARRAY[40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150],
+     ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14], '12-00');
 
 -- Добавление триггера обновления временной метки
-DROP TRIGGER IF EXISTS update_wind_average_corrections_timestamp ON public.wind_average_corrections;
-CREATE TRIGGER update_wind_average_corrections_timestamp
-    BEFORE UPDATE ON public.wind_average_corrections
+DROP TRIGGER IF EXISTS update_wind_bullet_drift_timestamp ON public.wind_bullet_drift;
+CREATE TRIGGER update_wind_bullet_drift_timestamp
+    BEFORE UPDATE ON public.wind_bullet_drift
+    FOR EACH ROW
+EXECUTE FUNCTION public.update_timestamp();
+
+CREATE TABLE IF NOT EXISTS public.calc_header_correction (
+                                                             measurment_type_id INTEGER PRIMARY KEY,
+                                                             description TEXT NOT NULL,
+                                                             values INTEGER[] NOT NULL,  -- Массив значений для использования в заголовках
+                                                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Добавляем триггер для обновления временной метки
+DROP TRIGGER IF EXISTS update_calc_header_correction_timestamp ON public.calc_header_correction;
+CREATE TRIGGER update_calc_header_correction_timestamp
+    BEFORE UPDATE ON public.calc_header_correction
     FOR EACH ROW
 EXECUTE FUNCTION public.update_timestamp();
 
 -- Начальное наполнение данными
-INSERT INTO public.wind_average_corrections
-(height_from, height_to, correction_factor)
+INSERT INTO public.calc_header_correction
+(measurment_type_id, description, values)
 VALUES
-    (0, 200, 0.5),
-    (200, 400, 0.7),
-    (400, 800, 0.8),
-    (800, 1200, 0.9),
-    (1200, 2000, 1.0),
-    (2000, 3000, 1.1),
-    (3000, 4000, 1.2);
+    (1, 'Заголовок для Таблицы № 2 (ДМК)', ARRAY[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50]),
+    (2, 'Заголовок для Таблицы № 2 (ВР)', ARRAY[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50]);
 
+-- Централизованная функция для проверки входных параметров измерений
+CREATE OR REPLACE FUNCTION public.fn_check_input_params(
+    p_height NUMERIC,
+    p_temperature NUMERIC,
+    p_pressure NUMERIC,
+    p_wind_direction NUMERIC,
+    p_wind_speed NUMERIC,
+    p_bullet_demolition_range NUMERIC DEFAULT NULL
+)
+    RETURNS public.check_result AS $$
+DECLARE
+    v_result public.check_result;
+    v_error_msgs TEXT[] := ARRAY[]::TEXT[];
+    v_height_check public.measure_type;
+    v_temp_check public.measure_type;
+    v_pressure_check public.measure_type;
+    v_wind_dir_check public.measure_type;
+    v_wind_speed_check public.measure_type;
+    v_bullet_range_check public.measure_type;
+BEGIN
+    -- Проверяем каждый параметр через существующую функцию валидации
+    v_height_check := public.get_measure_setting('Высота метеопоста', p_height);
+    IF v_height_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Высота метеопоста (%s) вне допустимого диапазона', p_height);
+    END IF;
+
+    v_temp_check := public.get_measure_setting('Температура', p_temperature);
+    IF v_temp_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Температура (%s) вне допустимого диапазона', p_temperature);
+    END IF;
+
+    v_pressure_check := public.get_measure_setting('Давление', p_pressure);
+    IF v_pressure_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Давление (%s) вне допустимого диапазона', p_pressure);
+    END IF;
+
+    v_wind_dir_check := public.get_measure_setting('Направление ветра', p_wind_direction);
+    IF v_wind_dir_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Направление ветра (%s) вне допустимого диапазона', p_wind_direction);
+    END IF;
+
+    v_wind_speed_check := public.get_measure_setting('Скорость ветра', p_wind_speed);
+    IF v_wind_speed_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Скорость ветра (%s) вне допустимого диапазона', p_wind_speed);
+    END IF;
+
+    -- Опциональная проверка дальности сноса пуль, если параметр передан
+    IF p_bullet_demolition_range IS NOT NULL THEN
+        v_bullet_range_check := public.get_measure_setting('Дальность сноса пуль', p_bullet_demolition_range);
+        IF v_bullet_range_check IS NULL THEN
+            v_error_msgs := v_error_msgs || format('Дальность сноса пуль (%s) вне допустимого диапазона', p_bullet_demolition_range);
+        END IF;
+    END IF;
+
+    -- Формируем результат проверки
+    IF array_length(v_error_msgs, 1) IS NULL THEN
+        -- Все проверки пройдены успешно
+        v_result.is_check := TRUE;
+        v_result.error_message := NULL;
+    ELSE
+        -- Есть ошибки в параметрах
+        v_result.is_check := FALSE;
+        v_result.error_message := array_to_string(v_error_msgs, '; ');
+    END IF;
+
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        v_result.is_check := FALSE;
+        v_result.error_message := 'Ошибка при проверке параметров: ' || SQLERRM;
+        RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
 
 -- Функция для расчета средней скорости ветра с коррекцией по высоте
 CREATE OR REPLACE FUNCTION public.calculate_average_wind_speed(
@@ -1109,10 +1211,20 @@ CREATE OR REPLACE FUNCTION public.calculate_average_wind_speed(
     RETURNS NUMERIC AS $$
 DECLARE
     v_correction_factor NUMERIC;
+    v_check_result public.check_result;
 BEGIN
     -- Проверка входных параметров
-    IF p_height IS NULL OR p_wind_speed IS NULL THEN
-        RAISE EXCEPTION 'Ошибка расчета: Значения высоты и скорости ветра не могут быть NULL';
+    v_check_result := public.fn_check_input_params(
+            p_height,
+            0,        -- Температура не важна для этого расчета
+            0,        -- Давление не важно для этого расчета
+            0,        -- Направление ветра не важно для этого расчета
+            p_wind_speed,
+            NULL      -- Дальность сноса пуль не используется
+                      );
+
+    IF NOT v_check_result.is_check THEN
+        RAISE EXCEPTION 'Ошибка валидации параметров: %', v_check_result.error_message;
     END IF;
 
     -- Находим подходящий фактор коррекции для указанной высоты
@@ -1146,16 +1258,25 @@ CREATE OR REPLACE FUNCTION public.calculate_wind_rifle_correction(
     RETURNS TABLE (
                       drift_correction INTEGER,   -- Корректировка сноса
                       direction_angle VARCHAR(5)  -- Угол направления
-                  )
-AS $$
+                  ) AS $$
 DECLARE
     v_nearest_height INTEGER;
     v_drift_value INTEGER;
-    v_col_name VARCHAR;
+    v_index INTEGER;
+    v_check_result public.check_result;
 BEGIN
     -- Проверка входных параметров
-    IF p_height IS NULL OR p_distance IS NULL OR p_wind_speed IS NULL OR p_wind_direction IS NULL THEN
-        RAISE EXCEPTION 'Ошибка расчета: Входные параметры не могут быть NULL';
+    v_check_result := public.fn_check_input_params(
+            p_height,
+            0,        -- Температура не важна для этого расчета
+            0,        -- Давление не важно для этого расчета
+            p_wind_direction,
+            p_wind_speed,
+            p_distance -- Проверяем дистанцию как дальность сноса пуль
+                      );
+
+    IF NOT v_check_result.is_check THEN
+        RAISE EXCEPTION 'Ошибка валидации параметров: %', v_check_result.error_message;
     END IF;
 
     -- Находим ближайшую высоту из таблицы
@@ -1168,21 +1289,35 @@ BEGIN
         RAISE EXCEPTION 'Не удалось найти подходящую высоту в таблице wind_bullet_drift';
     END IF;
 
-    -- Определяем имя колонки для дистанции
-    IF p_distance BETWEEN 40 AND 150 THEN
-        v_col_name := 'd' || p_distance;
-    ELSE
-        -- Округляем до ближайшего доступного расстояния
-        v_col_name := 'd' || GREATEST(40, LEAST(150, ROUND(p_distance / 10) * 10))::TEXT;
+    -- Находим ближайшую дистанцию и соответствующий индекс в массиве
+    WITH distance_array AS (
+        SELECT
+            standard_height,
+            distance_values,
+            drift_values,
+            direction_angle_inc,
+            generate_subscripts(distance_values, 1) AS idx
+        FROM public.wind_bullet_drift
+        WHERE standard_height = v_nearest_height
+    )
+    SELECT
+        idx INTO v_index
+    FROM distance_array
+    ORDER BY ABS(distance_values[idx] - p_distance)
+    LIMIT 1;
+
+    IF v_index IS NULL THEN
+        RAISE EXCEPTION 'Не удалось найти подходящую дистанцию для высоты %', v_nearest_height;
     END IF;
 
-    -- Получаем значение сноса
-    EXECUTE format('SELECT %I FROM public.wind_bullet_drift WHERE standard_height = $1', v_col_name)
-        INTO v_drift_value
-        USING v_nearest_height;
+    -- Получаем значение сноса для найденного индекса
+    SELECT
+        drift_values[v_index] INTO v_drift_value
+    FROM public.wind_bullet_drift
+    WHERE standard_height = v_nearest_height;
 
     IF v_drift_value IS NULL THEN
-        RAISE EXCEPTION 'Не удалось получить значение сноса для высоты % и колонки %', v_nearest_height, v_col_name;
+        RAISE EXCEPTION 'Не удалось получить значение сноса для высоты % и индекса %', v_nearest_height, v_index;
     END IF;
 
     -- Корректируем значение сноса с учетом скорости ветра
@@ -1202,7 +1337,6 @@ EXCEPTION
 END;
 $$ LANGUAGE plpgsql;
 
-
 -- Демонстрационный скрипт для проверки расчетов
 DO $$
     DECLARE
@@ -1213,12 +1347,28 @@ DO $$
         v_corrected_wind_speed NUMERIC;
         v_drift_correction INTEGER;
         v_direction_angle VARCHAR(5);
+        v_check_result public.check_result;
     BEGIN
+        -- Проверяем входные параметры с помощью новой функции
+        v_check_result := public.fn_check_input_params(
+                v_height,
+                15,       -- Берем стандартную температуру для примера
+                750,      -- Берем стандартное давление для примера
+                v_wind_direction,
+                v_wind_speed,
+                v_distance
+                          );
+
+        IF NOT v_check_result.is_check THEN
+            RAISE EXCEPTION 'Ошибка валидации параметров: %', v_check_result.error_message;
+        END IF;
+
         -- Расчет средней скорости ветра с коррекцией
         v_corrected_wind_speed := public.calculate_average_wind_speed(v_height, v_wind_speed);
 
         -- Получение коррекции для ветрового ружья
-        SELECT * FROM public.calculate_wind_rifle_correction(v_height, v_distance, v_corrected_wind_speed, v_wind_direction)
+        SELECT drift_correction, direction_angle
+        FROM public.calculate_wind_rifle_correction(v_height, v_distance, v_corrected_wind_speed, v_wind_direction)
         INTO v_drift_correction, v_direction_angle;
 
         -- Вывод результатов
@@ -1238,7 +1388,6 @@ DO $$
     END;
 $$;
 
-
 -- Индекс для таблицы wind_bullet_drift по высоте
 CREATE INDEX IF NOT EXISTS idx_wind_bullet_drift_height ON public.wind_bullet_drift(standard_height);
 
@@ -1253,7 +1402,6 @@ CREATE INDEX IF NOT EXISTS idx_measurment_baths_created ON public.measurment_bat
 
 -- Индекс для быстрого поиска измерений по типу устройства
 CREATE INDEX IF NOT EXISTS idx_measurement_type_id ON public.measurment_types(id, is_active);
-
 
 -- Представление с использованием CTE для анализа измерений по сотрудникам
 CREATE OR REPLACE VIEW public.employee_measurement_analysis AS
@@ -1270,25 +1418,21 @@ WITH measurement_data AS (
         mip.wind_direction,
         mip.wind_speed,
         mt.short_name AS device_type,
-        CASE
-            WHEN public.get_measure_setting('Температура', mip.temperature) IS NULL OR
-                 public.get_measure_setting('Давление', mip.pressure) IS NULL OR
-                 public.get_measure_setting('Направление ветра', mip.wind_direction) IS NULL OR
-                 public.get_measure_setting('Скорость ветра', mip.wind_speed) IS NULL
-                THEN TRUE
-            ELSE FALSE
-            END AS has_errors,
+        -- Используем централизованную функцию проверки
+        (public.fn_check_input_params(
+                mip.height,
+                mip.temperature,
+                mip.pressure,
+                mip.wind_direction,
+                mip.wind_speed
+         )).is_check = FALSE AS has_errors,
         mb.created_at
     FROM
         public.measurment_baths mb
-            JOIN
-        public.employees e ON mb.emploee_id = e.id
-            JOIN
-        public.military_ranks mr ON e.military_rank_id = mr.id
-            JOIN
-        public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
-            JOIN
-        public.measurment_types mt ON mip.measurment_type_id = mt.id
+            JOIN public.employees e ON mb.emploee_id = e.id
+            JOIN public.military_ranks mr ON e.military_rank_id = mr.id
+            JOIN public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+            JOIN public.measurment_types mt ON mip.measurment_type_id = mt.id
 ),
      employee_stats AS (
          -- Агрегируем статистику по сотрудникам
@@ -1327,7 +1471,6 @@ FROM
 ORDER BY
     total_measurements DESC;
 
-
 -- Представление "Самая эффективная высота измерения"
 CREATE OR REPLACE VIEW public.effective_measurement_height AS
 WITH measurement_errors AS (
@@ -1339,21 +1482,20 @@ WITH measurement_errors AS (
         mip.height,
         COUNT(*) AS measurements_count,
         SUM(CASE
-                WHEN public.get_measure_setting('Температура', mip.temperature) IS NULL OR
-                     public.get_measure_setting('Давление', mip.pressure) IS NULL OR
-                     public.get_measure_setting('Направление ветра', mip.wind_direction) IS NULL OR
-                     public.get_measure_setting('Скорость ветра', mip.wind_speed) IS NULL
-                    THEN 1
+                WHEN (public.fn_check_input_params(
+                        mip.height,
+                        mip.temperature,
+                        mip.pressure,
+                        mip.wind_direction,
+                        mip.wind_speed
+                      )).is_check = FALSE THEN 1
                 ELSE 0
             END) AS error_count
     FROM
         public.measurment_baths mb
-            JOIN
-        public.employees e ON mb.emploee_id = e.id
-            JOIN
-        public.military_ranks mr ON e.military_rank_id = mr.id
-            JOIN
-        public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+            JOIN public.employees e ON mb.emploee_id = e.id
+            JOIN public.military_ranks mr ON e.military_rank_id = mr.id
+            JOIN public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
     GROUP BY
         e.id, e.name, mr.description, mip.height
 ),
@@ -1385,3 +1527,101 @@ WHERE
     total_errors < 10 AND total_measurements >= 5
 ORDER BY
     total_errors ASC, total_measurements DESC;
+
+-- Обновляем представление для отображения сводной информации о последних измерениях
+CREATE OR REPLACE VIEW public.recent_measurements AS
+SELECT
+    mb.id AS measurement_id,
+    mb.started AS measurement_date,
+    e.name AS employee_name,
+    mr.description AS military_rank,
+    mt.short_name AS device_type,
+    mip.height,
+    mip.temperature,
+    mip.pressure,
+    mip.wind_direction,
+    mip.wind_speed,
+    public.get_header_pressure(mip.pressure, mip.temperature) AS formatted_pressure,
+    (public.fn_check_input_params(
+            mip.height,
+            mip.temperature,
+            mip.pressure,
+            mip.wind_direction,
+            mip.wind_speed
+     )).is_check = FALSE AS has_errors,
+    (public.fn_check_input_params(
+            mip.height,
+            mip.temperature,
+            mip.pressure,
+            mip.wind_direction,
+            mip.wind_speed
+     )).error_message AS error_details
+FROM
+    public.measurment_baths mb
+        JOIN public.employees e ON mb.emploee_id = e.id
+        JOIN public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+        JOIN public.military_ranks mr ON e.military_rank_id = mr.id
+        JOIN public.measurment_types mt ON mip.measurment_type_id = mt.id
+ORDER BY
+    mb.started DESC
+LIMIT
+    1000;
+
+COMMENT ON VIEW public.recent_measurements IS 'Представление последних 1000 измерений с детальной информацией';
+
+-- Обновляем функцию получения ошибок по сотрудникам
+CREATE OR REPLACE FUNCTION public.get_errors_by_employee()
+    RETURNS TABLE (
+                      employee_name TEXT,
+                      position_name VARCHAR(255),
+                      total_measurements BIGINT,
+                      error_count BIGINT,
+                      error_percentage NUMERIC
+                  ) AS $$
+BEGIN
+    RETURN QUERY
+        WITH measurements AS (
+            -- Объединяем данные измерений
+            SELECT
+                mb.emploee_id,
+                (public.fn_check_input_params(
+                        mip.height,
+                        mip.temperature,
+                        mip.pressure,
+                        mip.wind_direction,
+                        mip.wind_speed
+                 )).is_check = FALSE AS has_error
+            FROM
+                public.measurment_baths mb
+                    JOIN public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+        ),
+             employee_error_stats AS (
+                 -- Агрегируем ошибки по сотрудникам
+                 SELECT
+                     emp_id.emploee_id,
+                     COUNT(*) AS total_measurements,
+                     SUM(CASE WHEN emp_id.has_error THEN 1 ELSE 0 END) AS total_errors
+                 FROM
+                     measurements emp_id
+                 GROUP BY
+                     emp_id.emploee_id
+             )
+        -- Формируем финальный результат с именами сотрудников и процентом ошибок
+        SELECT
+            e.name AS employee_name,
+            mr.description AS position_name,
+            COALESCE(ees.total_measurements, 0) AS total_measurements,
+            COALESCE(ees.total_errors, 0) AS error_count,
+            CASE
+                WHEN COALESCE(ees.total_measurements, 0) > 0
+                    THEN ROUND((COALESCE(ees.total_errors, 0)::NUMERIC / ees.total_measurements) * 100, 2)
+                ELSE 0
+                END AS error_percentage
+        FROM
+            public.employees e
+                LEFT JOIN public.military_ranks mr ON e.military_rank_id = mr.id
+                LEFT JOIN employee_error_stats ees ON e.id = ees.emploee_id
+        ORDER BY
+            error_percentage DESC, total_measurements DESC;
+END;
+$$ LANGUAGE plpgsql;
