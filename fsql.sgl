@@ -1,7 +1,7 @@
 /**
  * Комплексный SQL-скрипт для управления метеорологическими данными
  * Схема: public
- * 
+ *
  * Скрипт выполняет:
  * - Создание структуры данных для хранения и анализа метеорологических измерений
  * - Определение функций для обработки и валидации данных
@@ -408,7 +408,7 @@ CREATE TYPE public.measure_type AS (
 
 /**
  * Функция для проверки параметра измерения на соответствие допустимым границам
- * 
+ *
  * @param type_param Название типа параметра (из таблицы measure_settings)
  * @param value_param Числовое значение параметра
  * @return Тип measure_type с проверенным значением или NULL в случае ошибки
@@ -463,7 +463,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция получения текущей даты в специальном формате для заголовка
- * 
+ *
  * @return Строка с форматированной датой DDHHL
  */
 CREATE OR REPLACE FUNCTION public.get_header_date()
@@ -479,7 +479,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция форматирования высоты для заголовка
- * 
+ *
  * @param p_height Высота в метрах
  * @return Строка с форматированной высотой (4 цифры с ведущими нулями)
  */
@@ -501,7 +501,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция интерполяции для коррекции температуры
- * 
+ *
  * @param p_temp_input Температура, для которой требуется рассчитать коррекцию
  * @return Значение коррекции температуры
  */
@@ -563,7 +563,7 @@ $$ LANGUAGE plpgsql;
 /**
  * Функция форматирования показаний давления для заголовка
  * с учетом отклонения от стандартного давления
- * 
+ *
  * @param p_pressure Давление в мм рт.ст.
  * @param p_temperature Температура в градусах Цельсия
  * @return Строка с форматированным представлением давления и температурной поправки
@@ -635,7 +635,7 @@ $$ LANGUAGE plpgsql;
 /**
  * Функция для получения значения температурного отклонения
  * в зависимости от высоты и значения
- * 
+ *
  * @param p_height Высота в метрах
  * @param p_value Значение температуры
  * @param p_is_positive Флаг знака температуры (true = положительная, false = отрицательная)
@@ -702,7 +702,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция для расчета температурного отклонения
- * 
+ *
  * @param p_height Высота в метрах
  * @param p_temperature Температура в градусах Цельсия
  * @return Массив с результатами расчета [десятки, единицы, отклонение_десятки, отклонение_единицы, итог]
@@ -1031,3 +1031,406 @@ COMMENT ON VIEW public.device_type_stats IS 'Статистика использ
 -- Примеры запросов к представлениям
 -- SELECT * FROM public.recent_measurements LIMIT 10;
 -- SELECT * FROM public.device_type_stats;
+
+
+-- Создание типа для статуса проверки входных параметров
+DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'check_result') THEN
+            CREATE TYPE public.check_result AS (
+                                                   is_check BOOLEAN,
+                                                   error_message TEXT
+                                               );
+        END IF;
+    END$$;
+
+-- Создание таблицы высот измерений
+CREATE TABLE IF NOT EXISTS public.measurement_heights (
+                                                          id SERIAL PRIMARY KEY,
+                                                          height INTEGER UNIQUE NOT NULL,
+                                                          description TEXT,
+                                                          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Создание триггера для обновления временной метки
+DROP TRIGGER IF EXISTS update_measurement_heights_timestamp ON public.measurement_heights;
+CREATE TRIGGER update_measurement_heights_timestamp
+    BEFORE UPDATE ON public.measurement_heights
+    FOR EACH ROW
+EXECUTE FUNCTION public.update_timestamp();
+
+-- Заполнение таблицы высот уникальными значениями из существующих таблиц
+INSERT INTO public.measurement_heights (height, description)
+SELECT DISTINCT height, 'Стандартная высота метеорологических измерений'
+FROM (
+         SELECT height FROM public.temperature_deviations
+         UNION
+         SELECT height FROM public.temperature_deviations_plus
+         UNION
+         SELECT standard_height AS height FROM public.wind_bullet_drift
+     ) AS unique_heights
+ON CONFLICT (height) DO NOTHING;
+
+-- Создание нормализованной таблицы отрицательных температурных отклонений с массивами
+CREATE TABLE IF NOT EXISTS public.temperature_deviations_normalized (
+                                                                        height_id INTEGER PRIMARY KEY REFERENCES public.measurement_heights(id),
+                                                                        deviation_values NUMERIC[] NOT NULL, -- Массив значений отклонений
+                                                                        deviation_keys INTEGER[] NOT NULL,   -- Массив соответствующих им ключей (температур)
+                                                                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Создание нормализованной таблицы положительных температурных отклонений с массивами
+CREATE TABLE IF NOT EXISTS public.temperature_deviations_plus_normalized (
+                                                                             height_id INTEGER PRIMARY KEY REFERENCES public.measurement_heights(id),
+                                                                             deviation_values NUMERIC[] NOT NULL, -- Массив значений отклонений
+                                                                             deviation_keys INTEGER[] NOT NULL,   -- Массив соответствующих им ключей (температур)
+                                                                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Миграция данных из старых таблиц в новую структуру с массивами
+INSERT INTO public.temperature_deviations_normalized (height_id, deviation_values, deviation_keys)
+SELECT
+    mh.id,
+    ARRAY[
+        td.dev_1, td.dev_2, td.dev_3, td.dev_4, td.dev_5,
+        td.dev_6, td.dev_7, td.dev_8, td.dev_9, td.dev_10,
+        td.dev_20, td.dev_30, td.dev_40, td.dev_50
+        ]::NUMERIC[],
+    ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50]::INTEGER[]
+FROM
+    public.temperature_deviations td
+        JOIN public.measurement_heights mh ON td.height = mh.height;
+
+INSERT INTO public.temperature_deviations_plus_normalized (height_id, deviation_values, deviation_keys)
+SELECT
+    mh.id,
+    ARRAY[
+        td.dev_1, td.dev_2, td.dev_3, td.dev_4, td.dev_5,
+        td.dev_6, td.dev_7, td.dev_8, td.dev_9, td.dev_10,
+        td.dev_20, td.dev_30,
+        COALESCE(td.dev_40, 0), -- Обработка NULL значений
+        COALESCE(td.dev_50, 0)  -- Обработка NULL значений
+        ]::NUMERIC[],
+    ARRAY[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50]::INTEGER[]
+FROM
+    public.temperature_deviations_plus td
+        JOIN public.measurement_heights mh ON td.height = mh.height;
+
+-- Создание триггеров для обновления временных меток
+DROP TRIGGER IF EXISTS update_temperature_deviations_normalized_timestamp ON public.temperature_deviations_normalized;
+CREATE TRIGGER update_temperature_deviations_normalized_timestamp
+    BEFORE UPDATE ON public.temperature_deviations_normalized
+    FOR EACH ROW
+EXECUTE FUNCTION public.update_timestamp();
+
+DROP TRIGGER IF EXISTS update_temperature_deviations_plus_normalized_timestamp ON public.temperature_deviations_plus_normalized;
+CREATE TRIGGER update_temperature_deviations_plus_normalized_timestamp
+    BEFORE UPDATE ON public.temperature_deviations_plus_normalized
+    FOR EACH ROW
+EXECUTE FUNCTION public.update_timestamp();
+
+CREATE OR REPLACE FUNCTION public.get_temperature_deviation_value(
+    p_height INTEGER,
+    p_value INTEGER,
+    p_is_positive BOOLEAN
+)
+    RETURNS NUMERIC AS $$
+DECLARE
+    v_result NUMERIC := NULL;
+    v_table_name TEXT;
+    v_height_id INTEGER;
+    v_values NUMERIC[];
+    v_keys INTEGER[];
+    v_index INTEGER := NULL;
+BEGIN
+    -- Получаем ID высоты
+    SELECT id INTO v_height_id
+    FROM public.measurement_heights
+    WHERE height = p_height;
+
+    IF v_height_id IS NULL THEN
+        -- Если точной высоты нет, находим ближайшую
+        SELECT id INTO v_height_id
+        FROM public.measurement_heights
+        ORDER BY ABS(height - p_height)
+        LIMIT 1;
+
+        IF v_height_id IS NULL THEN
+            RAISE WARNING 'Не найдена подходящая высота для %', p_height;
+            RETURN NULL;
+        END IF;
+    END IF;
+
+    -- Определяем таблицу в зависимости от знака
+    v_table_name := CASE
+                        WHEN p_is_positive THEN 'public.temperature_deviations_plus_normalized'
+                        ELSE 'public.temperature_deviations_normalized'
+        END;
+
+    -- Получаем массивы значений и ключей
+    EXECUTE format('
+        SELECT
+            deviation_values,
+            deviation_keys
+        FROM %s
+        WHERE height_id = %L',
+                   v_table_name, v_height_id
+            ) INTO v_values, v_keys;
+
+    -- Если массивы не получены, возвращаем NULL
+    IF v_values IS NULL OR v_keys IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- Ищем индекс нужного значения
+    FOR i IN 1..array_length(v_keys, 1) LOOP
+            IF v_keys[i] = p_value THEN
+                v_index := i;
+                EXIT;
+            END IF;
+        END LOOP;
+
+    -- Если нашли индекс, возвращаем значение
+    IF v_index IS NOT NULL AND v_index <= array_length(v_values, 1) THEN
+        v_result := v_values[v_index];
+    END IF;
+
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при получении значения отклонения: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Создание нормализованной таблицы для wind_bullet_drift
+CREATE TABLE IF NOT EXISTS public.wind_bullet_drift_normalized (
+                                                                   height_id INTEGER PRIMARY KEY REFERENCES public.measurement_heights(id),
+                                                                   distance_values INTEGER[] NOT NULL,
+                                                                   drift_values INTEGER[] NOT NULL,
+                                                                   direction_angle_inc VARCHAR(5) NOT NULL,
+                                                                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                                   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Миграция данных
+INSERT INTO public.wind_bullet_drift_normalized (
+    height_id, distance_values, drift_values, direction_angle_inc, created_at, updated_at
+)
+SELECT
+    mh.id, wbd.distance_values, wbd.drift_values, wbd.direction_angle_inc, wbd.created_at, wbd.updated_at
+FROM
+    public.wind_bullet_drift wbd
+        JOIN public.measurement_heights mh ON wbd.standard_height = mh.height;
+
+-- Создание триггера
+DROP TRIGGER IF EXISTS update_wind_bullet_drift_normalized_timestamp ON public.wind_bullet_drift_normalized;
+CREATE TRIGGER update_wind_bullet_drift_normalized_timestamp
+    BEFORE UPDATE ON public.wind_bullet_drift_normalized
+    FOR EACH ROW
+EXECUTE FUNCTION public.update_timestamp();
+
+-- Централизованная функция проверки входных параметров
+CREATE OR REPLACE FUNCTION public.fn_check_input_params(
+    p_height NUMERIC,
+    p_temperature NUMERIC,
+    p_pressure NUMERIC,
+    p_wind_direction NUMERIC,
+    p_wind_speed NUMERIC,
+    p_bullet_demolition_range NUMERIC DEFAULT NULL
+)
+    RETURNS public.check_result AS $$
+DECLARE
+    v_result public.check_result;
+    v_error_msgs TEXT[] := ARRAY[]::TEXT[];
+    v_height_check public.measure_type;
+    v_temp_check public.measure_type;
+    v_pressure_check public.measure_type;
+    v_wind_dir_check public.measure_type;
+    v_wind_speed_check public.measure_type;
+    v_bullet_range_check public.measure_type;
+BEGIN
+    -- Проверяем каждый параметр через существующую функцию валидации
+    v_height_check := public.get_measure_setting('Высота метеопоста', p_height);
+    IF v_height_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Высота метеопоста (%s) вне допустимого диапазона', p_height);
+    END IF;
+
+    v_temp_check := public.get_measure_setting('Температура', p_temperature);
+    IF v_temp_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Температура (%s) вне допустимого диапазона', p_temperature);
+    END IF;
+
+    v_pressure_check := public.get_measure_setting('Давление', p_pressure);
+    IF v_pressure_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Давление (%s) вне допустимого диапазона', p_pressure);
+    END IF;
+
+    v_wind_dir_check := public.get_measure_setting('Направление ветра', p_wind_direction);
+    IF v_wind_dir_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Направление ветра (%s) вне допустимого диапазона', p_wind_direction);
+    END IF;
+
+    v_wind_speed_check := public.get_measure_setting('Скорость ветра', p_wind_speed);
+    IF v_wind_speed_check IS NULL THEN
+        v_error_msgs := v_error_msgs || format('Скорость ветра (%s) вне допустимого диапазона', p_wind_speed);
+    END IF;
+
+    -- Опциональная проверка дальности сноса пуль, если параметр передан
+    IF p_bullet_demolition_range IS NOT NULL THEN
+        v_bullet_range_check := public.get_measure_setting('Дальность сноса пуль', p_bullet_demolition_range);
+        IF v_bullet_range_check IS NULL THEN
+            v_error_msgs := v_error_msgs || format('Дальность сноса пуль (%s) вне допустимого диапазона', p_bullet_demolition_range);
+        END IF;
+    END IF;
+
+    -- Формируем результат проверки
+    IF array_length(v_error_msgs, 1) IS NULL THEN
+        -- Все проверки пройдены успешно
+        v_result.is_check := TRUE;
+        v_result.error_message := NULL;
+    ELSE
+        -- Есть ошибки в параметрах
+        v_result.is_check := FALSE;
+        v_result.error_message := array_to_string(v_error_msgs, '; ');
+    END IF;
+
+    RETURN v_result;
+EXCEPTION
+    WHEN OTHERS THEN
+        v_result.is_check := FALSE;
+        v_result.error_message := 'Ошибка при проверке параметров: ' || SQLERRM;
+        RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION public.calculate_temperature_deviation(
+    p_height INTEGER,
+    p_temperature NUMERIC
+)
+    RETURNS NUMERIC[] AS $$
+DECLARE
+    v_tens INTEGER;          -- Десятки в температуре
+    v_ones INTEGER;          -- Единицы в температуре
+    v_dev_tens NUMERIC;      -- Отклонение для десятков
+    v_dev_ones NUMERIC;      -- Отклонение для единиц
+    v_result NUMERIC;        -- Итоговое отклонение
+    v_is_positive BOOLEAN;   -- Флаг знака температуры
+    v_check_result public.check_result;
+BEGIN
+    -- Проверка входных параметров через централизованную функцию
+    v_check_result := public.fn_check_input_params(
+            p_height,
+            p_temperature,
+            0, -- Давление не важно для этого расчета
+            0, -- Направление ветра не важно
+            0  -- Скорость ветра не важна
+                      );
+
+    IF NOT v_check_result.is_check THEN
+        RAISE EXCEPTION 'Ошибка валидации параметров: %', v_check_result.error_message;
+    END IF;
+
+    -- Определяем знак температуры
+    v_is_positive := (p_temperature >= 0);
+
+    -- Разбиваем температуру на десятки и единицы
+    v_tens := CASE
+                  WHEN p_temperature < 0 THEN
+                      GREATEST(FLOOR(p_temperature / 10) * 10, -50)  -- Ограничиваем для отрицательных значений
+                  ELSE
+                      FLOOR(p_temperature / 10) * 10
+        END;
+
+    v_ones := ABS(p_temperature - v_tens);
+
+    -- Получаем отклонения для десятков и единиц
+    v_dev_tens := public.get_temperature_deviation_value(p_height, ABS(v_tens), v_is_positive);
+    v_dev_ones := public.get_temperature_deviation_value(p_height, ABS(v_ones), v_is_positive);
+
+    -- Если одно из отклонений NULL, значит не можем провести расчет
+    IF v_dev_tens IS NULL OR v_dev_ones IS NULL THEN
+        RAISE WARNING 'Невозможно рассчитать температурное отклонение для высоты % и температуры %: недостаточно данных',
+            p_height, p_temperature;
+        RETURN NULL;
+    END IF;
+
+    -- Вычисляем итоговое отклонение
+    v_result := v_dev_tens + v_dev_ones;
+
+    -- Корректируем результат для отрицательных температур
+    IF NOT v_is_positive THEN
+        v_result := ABS(v_result) + 50;
+    END IF;
+
+    -- Возвращаем массив с результатами расчета
+    RETURN ARRAY[ABS(v_tens), ABS(v_ones), v_dev_tens, v_dev_ones, v_result];
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при расчете температурного отклонения: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE VIEW public.effective_measurement_height AS
+WITH measurement_errors AS (
+    -- Собираем данные об ошибках измерений по сотруднику и высоте
+    SELECT
+        e.id AS employee_id,
+        e.name AS employee_name,
+        mr.description AS military_rank,
+        mip.height,
+        COUNT(*) AS measurements_count,
+        SUM(CASE
+                WHEN (public.fn_check_input_params(
+                        mip.height,
+                        mip.temperature,
+                        mip.pressure,
+                        mip.wind_direction,
+                        mip.wind_speed
+                      )).is_check = FALSE THEN 1
+                ELSE 0
+            END) AS error_count
+    FROM
+        public.measurment_baths mb
+            JOIN public.employees e ON mb.emploee_id = e.id
+            JOIN public.military_ranks mr ON e.military_rank_id = mr.id
+            JOIN public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+    GROUP BY
+        e.id, e.name, mr.description, mip.height
+),
+     employee_height_stats AS (
+         -- Агрегируем статистику по сотрудникам
+         SELECT
+             employee_id,
+             employee_name,
+             military_rank,
+             MIN(height) AS min_height,
+             MAX(height) AS max_height,
+             SUM(measurements_count) AS total_measurements,
+             SUM(error_count) AS total_errors
+         FROM
+             measurement_errors
+         GROUP BY
+             employee_id, employee_name, military_rank
+     )
+SELECT
+    employee_name AS "ФИО пользователя",
+    military_rank AS "Звание",
+    min_height AS "Мин. высота метеопоста",
+    max_height AS "Макс. высота метеопоста",
+    total_measurements AS "Всего измерений",
+    total_errors AS "Из них ошибочны"
+FROM
+    employee_height_stats
+WHERE
+    total_errors < 10 AND total_measurements >= 5
+ORDER BY
+    total_errors ASC, total_measurements DESC;
+
+SELECT * FROM public.effective_measurement_height;
