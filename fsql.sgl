@@ -1,7 +1,7 @@
 /**
  * Комплексный SQL-скрипт для управления метеорологическими данными
  * Схема: public
- * 
+ *
  * Скрипт выполняет:
  * - Создание структуры данных для хранения и анализа метеорологических измерений
  * - Определение функций для обработки и валидации данных
@@ -408,7 +408,7 @@ CREATE TYPE public.measure_type AS (
 
 /**
  * Функция для проверки параметра измерения на соответствие допустимым границам
- * 
+ *
  * @param type_param Название типа параметра (из таблицы measure_settings)
  * @param value_param Числовое значение параметра
  * @return Тип measure_type с проверенным значением или NULL в случае ошибки
@@ -463,7 +463,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция получения текущей даты в специальном формате для заголовка
- * 
+ *
  * @return Строка с форматированной датой DDHHL
  */
 CREATE OR REPLACE FUNCTION public.get_header_date()
@@ -479,7 +479,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция форматирования высоты для заголовка
- * 
+ *
  * @param p_height Высота в метрах
  * @return Строка с форматированной высотой (4 цифры с ведущими нулями)
  */
@@ -501,7 +501,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция интерполяции для коррекции температуры
- * 
+ *
  * @param p_temp_input Температура, для которой требуется рассчитать коррекцию
  * @return Значение коррекции температуры
  */
@@ -563,7 +563,7 @@ $$ LANGUAGE plpgsql;
 /**
  * Функция форматирования показаний давления для заголовка
  * с учетом отклонения от стандартного давления
- * 
+ *
  * @param p_pressure Давление в мм рт.ст.
  * @param p_temperature Температура в градусах Цельсия
  * @return Строка с форматированным представлением давления и температурной поправки
@@ -635,7 +635,7 @@ $$ LANGUAGE plpgsql;
 /**
  * Функция для получения значения температурного отклонения
  * в зависимости от высоты и значения
- * 
+ *
  * @param p_height Высота в метрах
  * @param p_value Значение температуры
  * @param p_is_positive Флаг знака температуры (true = положительная, false = отрицательная)
@@ -702,7 +702,7 @@ $$ LANGUAGE plpgsql;
 
 /**
  * Функция для расчета температурного отклонения
- * 
+ *
  * @param p_height Высота в метрах
  * @param p_temperature Температура в градусах Цельсия
  * @return Массив с результатами расчета [десятки, единицы, отклонение_десятки, отклонение_единицы, итог]
@@ -1031,3 +1031,357 @@ COMMENT ON VIEW public.device_type_stats IS 'Статистика использ
 -- Примеры запросов к представлениям
 -- SELECT * FROM public.recent_measurements LIMIT 10;
 -- SELECT * FROM public.device_type_stats;
+
+
+-- Таблица для хранения корректировок для расчета среднего ветра
+CREATE TABLE IF NOT EXISTS public.wind_average_corrections (
+                                                               id SERIAL PRIMARY KEY,
+                                                               height_from NUMERIC(8,2) NOT NULL,
+                                                               height_to NUMERIC(8,2) NOT NULL,
+                                                               correction_factor NUMERIC(8,2) NOT NULL,
+                                                               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                                               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE public.wind_bullet_drift (
+                                          standard_height INT PRIMARY KEY,
+                                          d40  INT,
+                                          d50  INT,
+                                          d60  INT,
+                                          d70  INT,
+                                          d80  INT,
+                                          d90  INT,
+                                          d100 INT,
+                                          d110 INT,
+                                          d120 INT,
+                                          d130 INT,
+                                          d140 INT,
+                                          d150 INT,
+                                          direction_angle_inc VARCHAR(5)
+);
+
+INSERT INTO public.wind_bullet_drift
+(standard_height, d40, d50, d60, d70, d80, d90, d100, d110, d120, d130, d140, d150, direction_angle_inc)
+VALUES
+    (200, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 9, 11, '0-00'),
+    (300, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 10, 12, '1-00'),
+    (400, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, '2-00'),
+    (500, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, '3-00'),
+    (600, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, '4-00'),
+    (700, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '5-00'),
+    (800, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '6-00'),
+    (900, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '7-00'),
+    (1000, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '8-00'),
+    (1100, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '9-00'),
+    (1200, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '10-00'),
+    (1300, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '11-00'),
+    (1400, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '12-00'),
+    (1500, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, '12-00');
+
+
+CREATE INDEX IF NOT EXISTS idx_wind_bullet_drift_height ON public.wind_bullet_drift(standard_height);
+
+-- Добавление триггера обновления временной метки
+DROP TRIGGER IF EXISTS update_wind_average_corrections_timestamp ON public.wind_average_corrections;
+CREATE TRIGGER update_wind_average_corrections_timestamp
+    BEFORE UPDATE ON public.wind_average_corrections
+    FOR EACH ROW
+EXECUTE FUNCTION public.update_timestamp();
+
+-- Начальное наполнение данными
+INSERT INTO public.wind_average_corrections
+(height_from, height_to, correction_factor)
+VALUES
+    (0, 200, 0.5),
+    (200, 400, 0.7),
+    (400, 800, 0.8),
+    (800, 1200, 0.9),
+    (1200, 2000, 1.0),
+    (2000, 3000, 1.1),
+    (3000, 4000, 1.2);
+
+
+-- Функция для расчета средней скорости ветра с коррекцией по высоте
+CREATE OR REPLACE FUNCTION public.calculate_average_wind_speed(
+    p_height NUMERIC,           -- Высота в метрах
+    p_wind_speed NUMERIC        -- Измеренная скорость ветра
+)
+    RETURNS NUMERIC AS $$
+DECLARE
+    v_correction_factor NUMERIC;
+BEGIN
+    -- Проверка входных параметров
+    IF p_height IS NULL OR p_wind_speed IS NULL THEN
+        RAISE EXCEPTION 'Ошибка расчета: Значения высоты и скорости ветра не могут быть NULL';
+    END IF;
+
+    -- Находим подходящий фактор коррекции для указанной высоты
+    SELECT correction_factor INTO v_correction_factor
+    FROM public.wind_average_corrections
+    WHERE p_height BETWEEN height_from AND height_to
+    LIMIT 1;
+
+    -- Если фактор коррекции не найден, используем значение по умолчанию 1.0
+    IF v_correction_factor IS NULL THEN
+        v_correction_factor := 1.0;
+        RAISE NOTICE 'Для высоты % м не найден фактор коррекции, используется значение по умолчанию 1.0', p_height;
+    END IF;
+
+    -- Применяем коррекцию и возвращаем результат
+    RETURN ROUND(p_wind_speed * v_correction_factor, 2);
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при расчете средней скорости ветра: %', SQLERRM;
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для расчета поправок по ветровому ружью
+CREATE OR REPLACE FUNCTION public.calculate_wind_rifle_correction(
+    p_height INTEGER,           -- Высота в метрах
+    p_distance INTEGER,         -- Дистанция в метрах
+    p_wind_speed NUMERIC,       -- Скорость ветра
+    p_wind_direction NUMERIC    -- Направление ветра в градусах
+)
+    RETURNS TABLE (
+                      drift_correction INTEGER,   -- Корректировка сноса
+                      direction_angle VARCHAR(5)  -- Угол направления
+                  )
+AS $$
+DECLARE
+    v_nearest_height INTEGER;
+    v_drift_value INTEGER;
+    v_col_name VARCHAR;
+BEGIN
+    -- Проверка входных параметров
+    IF p_height IS NULL OR p_distance IS NULL OR p_wind_speed IS NULL OR p_wind_direction IS NULL THEN
+        RAISE EXCEPTION 'Ошибка расчета: Входные параметры не могут быть NULL';
+    END IF;
+
+    -- Находим ближайшую высоту из таблицы
+    SELECT standard_height INTO v_nearest_height
+    FROM public.wind_bullet_drift
+    ORDER BY ABS(standard_height - p_height)
+    LIMIT 1;
+
+    IF v_nearest_height IS NULL THEN
+        RAISE EXCEPTION 'Не удалось найти подходящую высоту в таблице wind_bullet_drift';
+    END IF;
+
+    -- Определяем имя колонки для дистанции
+    IF p_distance BETWEEN 40 AND 150 THEN
+        v_col_name := 'd' || p_distance;
+    ELSE
+        -- Округляем до ближайшего доступного расстояния
+        v_col_name := 'd' || GREATEST(40, LEAST(150, ROUND(p_distance / 10) * 10))::TEXT;
+    END IF;
+
+    -- Получаем значение сноса
+    EXECUTE format('SELECT %I FROM public.wind_bullet_drift WHERE standard_height = $1', v_col_name)
+        INTO v_drift_value
+        USING v_nearest_height;
+
+    IF v_drift_value IS NULL THEN
+        RAISE EXCEPTION 'Не удалось получить значение сноса для высоты % и колонки %', v_nearest_height, v_col_name;
+    END IF;
+
+    -- Корректируем значение сноса с учетом скорости ветра
+    v_drift_value := ROUND(v_drift_value * p_wind_speed);
+
+    -- Получаем угол направления и возвращаем результаты
+    RETURN QUERY
+        SELECT
+            v_drift_value,
+            direction_angle_inc
+        FROM public.wind_bullet_drift
+        WHERE standard_height = v_nearest_height;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE WARNING 'Ошибка при расчете поправок по ветровому ружью: %', SQLERRM;
+        RETURN;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- Демонстрационный скрипт для проверки расчетов
+DO $$
+    DECLARE
+        v_height INTEGER := 300;
+        v_distance INTEGER := 100;
+        v_wind_speed NUMERIC := 5.5;
+        v_wind_direction NUMERIC := 45;
+        v_corrected_wind_speed NUMERIC;
+        v_drift_correction INTEGER;
+        v_direction_angle VARCHAR(5);
+    BEGIN
+        -- Расчет средней скорости ветра с коррекцией
+        v_corrected_wind_speed := public.calculate_average_wind_speed(v_height, v_wind_speed);
+
+        -- Получение коррекции для ветрового ружья
+        SELECT * FROM public.calculate_wind_rifle_correction(v_height, v_distance, v_corrected_wind_speed, v_wind_direction)
+        INTO v_drift_correction, v_direction_angle;
+
+        -- Вывод результатов
+        RAISE NOTICE 'Демонстрация расчетов для ветрового ружья:';
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Исходные параметры:';
+        RAISE NOTICE 'Высота: % м', v_height;
+        RAISE NOTICE 'Дистанция: % м', v_distance;
+        RAISE NOTICE 'Скорость ветра: % м/с', v_wind_speed;
+        RAISE NOTICE 'Направление ветра: % градусов', v_wind_direction;
+        RAISE NOTICE '-------------------------------------------------------------';
+        RAISE NOTICE 'Результаты расчетов:';
+        RAISE NOTICE 'Скорректированная скорость ветра: % м/с', v_corrected_wind_speed;
+        RAISE NOTICE 'Коррекция сноса: % единиц', v_drift_correction;
+        RAISE NOTICE 'Угол направления: %', v_direction_angle;
+        RAISE NOTICE '-------------------------------------------------------------';
+    END;
+$$;
+
+
+-- Индекс для таблицы wind_bullet_drift по высоте
+CREATE INDEX IF NOT EXISTS idx_wind_bullet_drift_height ON public.wind_bullet_drift(standard_height);
+
+-- Индекс для таблицы wind_average_corrections
+CREATE INDEX IF NOT EXISTS idx_wind_avg_corrections_height ON public.wind_average_corrections(height_from, height_to);
+
+-- Композитный индекс для measurment_input_params по высоте и ветру
+CREATE INDEX IF NOT EXISTS idx_measurement_params_height_wind ON public.measurment_input_params(height, wind_speed, wind_direction);
+
+-- Индекс по времени создания измерения
+CREATE INDEX IF NOT EXISTS idx_measurment_baths_created ON public.measurment_baths(created_at);
+
+-- Индекс для быстрого поиска измерений по типу устройства
+CREATE INDEX IF NOT EXISTS idx_measurement_type_id ON public.measurment_types(id, is_active);
+
+
+-- Представление с использованием CTE для анализа измерений по сотрудникам
+CREATE OR REPLACE VIEW public.employee_measurement_analysis AS
+WITH measurement_data AS (
+    -- Собираем данные измерений с параметрами
+    SELECT
+        e.id AS employee_id,
+        e.name AS employee_name,
+        mr.description AS military_rank,
+        mb.id AS measurement_id,
+        mip.height,
+        mip.temperature,
+        mip.pressure,
+        mip.wind_direction,
+        mip.wind_speed,
+        mt.short_name AS device_type,
+        CASE
+            WHEN public.get_measure_setting('Температура', mip.temperature) IS NULL OR
+                 public.get_measure_setting('Давление', mip.pressure) IS NULL OR
+                 public.get_measure_setting('Направление ветра', mip.wind_direction) IS NULL OR
+                 public.get_measure_setting('Скорость ветра', mip.wind_speed) IS NULL
+                THEN TRUE
+            ELSE FALSE
+            END AS has_errors,
+        mb.created_at
+    FROM
+        public.measurment_baths mb
+            JOIN
+        public.employees e ON mb.emploee_id = e.id
+            JOIN
+        public.military_ranks mr ON e.military_rank_id = mr.id
+            JOIN
+        public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+            JOIN
+        public.measurment_types mt ON mip.measurment_type_id = mt.id
+),
+     employee_stats AS (
+         -- Агрегируем статистику по сотрудникам
+         SELECT
+             employee_id,
+             employee_name,
+             military_rank,
+             COUNT(*) AS total_measurements,
+             SUM(CASE WHEN has_errors THEN 1 ELSE 0 END) AS error_count,
+             ROUND((SUM(CASE WHEN has_errors THEN 1 ELSE 0 END)::NUMERIC / COUNT(*)) * 100, 2) AS error_percentage,
+             MIN(height) AS min_height,
+             MAX(height) AS max_height,
+             ROUND(AVG(temperature), 2) AS avg_temperature,
+             ROUND(AVG(pressure), 2) AS avg_pressure,
+             ROUND(AVG(wind_speed), 2) AS avg_wind_speed,
+             STRING_AGG(DISTINCT device_type, ', ') AS used_devices
+         FROM
+             measurement_data
+         GROUP BY
+             employee_id, employee_name, military_rank
+     )
+SELECT
+    employee_name AS "ФИО сотрудника",
+    military_rank AS "Звание",
+    total_measurements AS "Всего измерений",
+    error_count AS "Количество ошибок",
+    error_percentage AS "Процент ошибок (%)",
+    min_height AS "Мин. высота (м)",
+    max_height AS "Макс. высота (м)",
+    avg_temperature AS "Средняя температура (°C)",
+    avg_pressure AS "Среднее давление (мм рт.ст.)",
+    avg_wind_speed AS "Средняя скорость ветра (м/с)",
+    used_devices AS "Использованные устройства"
+FROM
+    employee_stats
+ORDER BY
+    total_measurements DESC;
+
+
+-- Представление "Самая эффективная высота измерения"
+CREATE OR REPLACE VIEW public.effective_measurement_height AS
+WITH measurement_errors AS (
+    -- Собираем данные об ошибках измерений по сотруднику и высоте
+    SELECT
+        e.id AS employee_id,
+        e.name AS employee_name,
+        mr.description AS military_rank,
+        mip.height,
+        COUNT(*) AS measurements_count,
+        SUM(CASE
+                WHEN public.get_measure_setting('Температура', mip.temperature) IS NULL OR
+                     public.get_measure_setting('Давление', mip.pressure) IS NULL OR
+                     public.get_measure_setting('Направление ветра', mip.wind_direction) IS NULL OR
+                     public.get_measure_setting('Скорость ветра', mip.wind_speed) IS NULL
+                    THEN 1
+                ELSE 0
+            END) AS error_count
+    FROM
+        public.measurment_baths mb
+            JOIN
+        public.employees e ON mb.emploee_id = e.id
+            JOIN
+        public.military_ranks mr ON e.military_rank_id = mr.id
+            JOIN
+        public.measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+    GROUP BY
+        e.id, e.name, mr.description, mip.height
+),
+     employee_height_stats AS (
+         -- Агрегируем статистику по сотрудникам
+         SELECT
+             employee_id,
+             employee_name,
+             military_rank,
+             MIN(height) AS min_height,
+             MAX(height) AS max_height,
+             SUM(measurements_count) AS total_measurements,
+             SUM(error_count) AS total_errors
+         FROM
+             measurement_errors
+         GROUP BY
+             employee_id, employee_name, military_rank
+     )
+SELECT
+    employee_name AS "ФИО пользователя",
+    military_rank AS "Звание",
+    min_height AS "Мин. высота метеопоста",
+    max_height AS "Макс. высота метеопоста",
+    total_measurements AS "Всего измерений",
+    total_errors AS "Из них ошибочны"
+FROM
+    employee_height_stats
+WHERE
+    total_errors < 10 AND total_measurements >= 5
+ORDER BY
+    total_errors ASC, total_measurements DESC;
