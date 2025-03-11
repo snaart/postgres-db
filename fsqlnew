@@ -1322,4 +1322,161 @@ left join measurments_height_cte as t4 on t1.id = t4.emploee_id
 order by coalesce(quantity_fails,0) asc, coalesce(min_height, 0) asc ;
 
 -- Проверка отчета
-select * from vw_report_fails_height_statistics
+select * from vw_report_fails_height_statistics;
+
+-- Универсальная функция для расчетов метеорологических параметров
+CREATE OR REPLACE FUNCTION fn_calc_meteo_parameters(
+    par_calculation_type TEXT, -- 'temperature', 'wind_speed', 'wind_direction'
+    par_value NUMERIC(8,2), -- температура или дальность сноса пуль в зависимости от типа расчета
+    par_measurement_type_id INTEGER,
+    par_measurement_type_name TEXT DEFAULT NULL -- опциональное название измерительного устройства для вывода
+)
+RETURNS TABLE (
+    measurement_type TEXT,
+    height INTEGER,
+    deviation INTEGER,
+    calculation_type TEXT
+)
+LANGUAGE 'plpgsql'
+AS $body$
+DECLARE
+    var_temperature_corrections temperature_correction[] := '{}';
+    var_wind_speed_corrections wind_direction_correction[] := '{}';
+    var_measurement_type_name TEXT;
+BEGIN
+    -- Определяем название измерительного устройства, если не передано
+    IF par_measurement_type_name IS NULL THEN
+        SELECT short_name INTO var_measurement_type_name
+        FROM public.measurment_types
+        WHERE id = par_measurement_type_id;
+    ELSE
+        var_measurement_type_name := par_measurement_type_name;
+    END IF;
+
+    IF par_calculation_type = 'temperature' THEN
+        -- Расчет отклонений температуры воздуха (Таблица 2)
+        CALL public.sp_calc_temperature_deviation(
+            par_temperature_correction => par_value,
+            par_measurement_type_id => par_measurement_type_id,
+            par_corrections => var_temperature_corrections
+        );
+
+        -- Проверка наличия результатов
+        IF array_length(var_temperature_corrections, 1) IS NULL THEN
+            RAISE NOTICE 'Нет результатов для расчета отклонений температуры';
+            RETURN;
+        END IF;
+
+        -- Вывод результатов
+        FOR i IN 1..array_length(var_temperature_corrections, 1)
+        LOOP
+            measurement_type := var_measurement_type_name;
+            height := var_temperature_corrections[i].height;
+            deviation := var_temperature_corrections[i].temperature_deviation;
+            calculation_type := 'Отклонение температуры';
+            RETURN NEXT;
+        END LOOP;
+
+    ELSIF par_calculation_type = 'wind_speed' THEN
+        -- Расчет скорости среднего ветра (Таблица 3)
+        CALL public.sp_calc_wind_speed_deviation(
+            par_bullet_demolition_range => par_value,
+            par_measurement_type_id => par_measurement_type_id,
+            par_corrections => var_wind_speed_corrections
+        );
+
+        -- Проверка наличия результатов
+        IF array_length(var_wind_speed_corrections, 1) IS NULL THEN
+            RAISE NOTICE 'Нет результатов для расчета скорости среднего ветра';
+            RETURN;
+        END IF;
+
+        -- Вывод результатов
+        FOR i IN 1..array_length(var_wind_speed_corrections, 1)
+        LOOP
+            measurement_type := var_measurement_type_name;
+            height := var_wind_speed_corrections[i].height;
+            deviation := var_wind_speed_corrections[i].wind_speed_deviation;
+            calculation_type := 'Скорость среднего ветра';
+            RETURN NEXT;
+        END LOOP;
+
+    ELSIF par_calculation_type = 'wind_direction' THEN
+        -- Расчет направления среднего ветра (Таблица 3)
+        CALL public.sp_calc_wind_speed_deviation(
+            par_bullet_demolition_range => par_value,
+            par_measurement_type_id => par_measurement_type_id,
+            par_corrections => var_wind_speed_corrections
+        );
+
+        -- Проверка наличия результатов
+        IF array_length(var_wind_speed_corrections, 1) IS NULL THEN
+            RAISE NOTICE 'Нет результатов для расчета направления среднего ветра';
+            RETURN;
+        END IF;
+
+        -- Вывод результатов
+        FOR i IN 1..array_length(var_wind_speed_corrections, 1)
+        LOOP
+            measurement_type := var_measurement_type_name;
+            height := var_wind_speed_corrections[i].height;
+            deviation := var_wind_speed_corrections[i].wind_deviation;
+            calculation_type := 'Направление среднего ветра';
+            RETURN NEXT;
+        END LOOP;
+    ELSE
+        RAISE EXCEPTION 'Неизвестный тип расчета: %', par_calculation_type;
+    END IF;
+END;
+$body$;
+
+-- Тестовые вызовы для универсальной функции расчета
+DO $$
+BEGIN
+    RAISE NOTICE '======= Тестирование функции fn_calc_meteo_parameters =======';
+
+    -- 1. Отклонение температуры воздуха для ДМК (Таблица 2)
+    RAISE NOTICE 'Отклонение температуры воздуха для ДМК (Таблица 2):';
+    FOR r IN (SELECT * FROM fn_calc_meteo_parameters('temperature', 3, 1) ORDER BY height)
+    LOOP
+        RAISE NOTICE 'Устройство: %, Высота: % м, Отклонение: % градусов', r.measurement_type, r.height, r.deviation;
+    END LOOP;
+
+    -- 2. Отклонение температуры воздуха для Ветрового ружья (Таблица 2)
+    RAISE NOTICE 'Отклонение температуры воздуха для Ветрового ружья (Таблица 2):';
+    FOR r IN (SELECT * FROM fn_calc_meteo_parameters('temperature', 3, 2) ORDER BY height)
+    LOOP
+        RAISE NOTICE 'Устройство: %, Высота: % м, Отклонение: % градусов', r.measurement_type, r.height, r.deviation;
+    END LOOP;
+
+    -- 3. Скорость среднего ветра для ДМК (Таблица 3)
+    RAISE NOTICE 'Скорость среднего ветра для ДМК (Таблица 3):';
+    FOR r IN (SELECT * FROM fn_calc_meteo_parameters('wind_speed', 14, 1) ORDER BY height)
+    LOOP
+        RAISE NOTICE 'Устройство: %, Высота: % м, Скорость: % м/с', r.measurement_type, r.height, r.deviation;
+    END LOOP;
+
+    -- 4. Скорость среднего ветра для Ветрового ружья (Таблица 3)
+    RAISE NOTICE 'Скорость среднего ветра для Ветрового ружья (Таблица 3):';
+    FOR r IN (SELECT * FROM fn_calc_meteo_parameters('wind_speed', 14, 2) ORDER BY height)
+    LOOP
+        RAISE NOTICE 'Устройство: %, Высота: % м, Скорость: % м/с', r.measurement_type, r.height, r.deviation;
+    END LOOP;
+
+    -- 5. Направление среднего ветра для ДМК (Таблица 3)
+    RAISE NOTICE 'Направление среднего ветра для ДМК (Таблица 3):';
+    FOR r IN (SELECT * FROM fn_calc_meteo_parameters('wind_direction', 14, 1) ORDER BY height)
+    LOOP
+        RAISE NOTICE 'Устройство: %, Высота: % м, Направление: % градусов', r.measurement_type, r.height, r.deviation;
+    END LOOP;
+
+    -- 6. Направление среднего ветра для Ветрового ружья (Таблица 3)
+    RAISE NOTICE 'Направление среднего ветра для Ветрового ружья (Таблица 3):';
+    FOR r IN (SELECT * FROM fn_calc_meteo_parameters('wind_direction', 14, 2) ORDER BY height)
+    LOOP
+        RAISE NOTICE 'Устройство: %, Высота: % м, Направление: % градусов', r.measurement_type, r.height, r.deviation;
+    END LOOP;
+
+    RAISE NOTICE '======= Тестирование завершено =======';
+END $$;
+
